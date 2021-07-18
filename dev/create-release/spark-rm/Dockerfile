@@ -24,7 +24,7 @@
 # * R-base/R-base-dev (3.3.2+)
 # * Ruby 2.3 build utilities
 
-FROM ubuntu:16.04
+FROM ubuntu:xenial-20210416
 
 # These arguments are just for reuse and not really meant to be customized.
 ARG APT_INSTALL="apt-get install --no-install-recommends -y"
