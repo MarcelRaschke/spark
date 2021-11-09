@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-FROM ubuntu:xenial
+FROM ubuntu:xenial-20210114
 
 # Upgrade package index
 # install a few other useful packages plus Open Jdk 8
