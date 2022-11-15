@@ -53,3 +53,4 @@ protobuf==4.21.6
 
 # Spark Connect python proto generation plugin (optional)
 mypy-protobuf==3.3.0
+setuptools>=65.5.1 # not directly required, pinned by Snyk to avoid a vulnerability
