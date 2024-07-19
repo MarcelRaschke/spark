@@ -902,6 +902,9 @@ object functions {
   /**
    * Aggregate function: returns the value associated with the maximum value of ord.
    *
+   * @note The function is non-deterministic so the output order can be different for
+   * those associated the same values of `e`.
+   *
    * @group agg_funcs
    * @since 3.3.0
    */
@@ -951,6 +954,9 @@ object functions {
 
   /**
    * Aggregate function: returns the value associated with the minimum value of ord.
+   *
+   * @note The function is non-deterministic so the output order can be different for
+   * those associated the same values of `e`.
    *
    * @group agg_funcs
    * @since 3.3.0
@@ -4235,6 +4241,19 @@ object functions {
     Column.fn("substring", str, lit(pos), lit(len))
 
   /**
+   * Substring starts at `pos` and is of length `len` when str is String type or
+   * returns the slice of byte array that starts at `pos` in byte and is of length `len`
+   * when str is Binary type
+   *
+   * @note The position is not zero based, but 1 based index.
+   *
+   * @group string_funcs
+   * @since 4.0.0
+   */
+  def substring(str: Column, pos: Column, len: Column): Column =
+    Column.fn("substring", str, pos, len)
+
+  /**
    * Returns the substring from string str before count occurrences of the delimiter delim.
    * If count is positive, everything the left of the final delimiter (counting from left) is
    * returned. If count is negative, every to the right of the final delimiter (counting from the
@@ -4528,6 +4547,15 @@ object functions {
    * @since 3.5.0
    */
   def url_decode(str: Column): Column = Column.fn("url_decode", str)
+
+  /**
+   * This is a special version of `url_decode` that performs the same operation, but returns
+   * a NULL value instead of raising an error if the decoding cannot be performed.
+   *
+   * @group url_funcs
+   * @since 4.0.0
+   */
+  def try_url_decode(str: Column): Column = Column.fn("try_url_decode", str)
 
   /**
    * Translates a string into 'application/x-www-form-urlencoded' format
