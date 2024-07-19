@@ -16,7 +16,7 @@
  */
 package org.apache.spark.deploy.k8s.integrationtest
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 import io.fabric8.kubernetes.api.model.Pod
 import org.scalatest.concurrent.{Eventually, PatienceConfiguration}
@@ -25,6 +25,7 @@ import org.scalatest.time.{Seconds, Span}
 
 import org.apache.spark.{SparkFunSuite, TestUtils}
 import org.apache.spark.deploy.k8s.integrationtest.KubernetesSuite.SPARK_PI_MAIN_CLASS
+import org.apache.spark.io.CompressionCodec
 import org.apache.spark.launcher.SparkLauncher
 
 private[spark] trait BasicTestsSuite { k8sSuite: KubernetesSuite =>
@@ -93,7 +94,7 @@ private[spark] trait BasicTestsSuite { k8sSuite: KubernetesSuite =>
   test("Run SparkPi with an argument.", k8sTestTag) {
     // This additional configuration with snappy is for SPARK-26995
     sparkAppConf
-      .set("spark.io.compression.codec", "snappy")
+      .set("spark.io.compression.codec", CompressionCodec.SNAPPY)
     runSparkPiAndVerifyCompletion(appArgs = Array("5"))
   }
 
@@ -101,16 +102,18 @@ private[spark] trait BasicTestsSuite { k8sSuite: KubernetesSuite =>
     sparkAppConf
       .set("spark.kubernetes.driver.label.label1", "label1-value")
       .set("spark.kubernetes.driver.label.label2", "label2-value")
+      .set("spark.kubernetes.driver.label.customAppIdLabelKey", "{{APP_ID}}")
       .set("spark.kubernetes.driver.annotation.annotation1", "annotation1-value")
       .set("spark.kubernetes.driver.annotation.annotation2", "annotation2-value")
-      .set("spark.kubernetes.driver.annotation.yunikorn.apache.org/app-id", "{{APP_ID}}")
+      .set("spark.kubernetes.driver.annotation.customAppIdAnnotation", "{{APP_ID}}")
       .set("spark.kubernetes.driverEnv.ENV1", "VALUE1")
       .set("spark.kubernetes.driverEnv.ENV2", "VALUE2")
       .set("spark.kubernetes.executor.label.label1", "label1-value")
       .set("spark.kubernetes.executor.label.label2", "label2-value")
+      .set("spark.kubernetes.executor.label.customAppIdLabelKey", "{{APP_ID}}")
       .set("spark.kubernetes.executor.annotation.annotation1", "annotation1-value")
       .set("spark.kubernetes.executor.annotation.annotation2", "annotation2-value")
-      .set("spark.kubernetes.executor.annotation.yunikorn.apache.org/app-id", "{{APP_ID}}")
+      .set("spark.kubernetes.executor.annotation.customAppIdAnnotation", "{{APP_ID}}")
       .set("spark.executorEnv.ENV1", "VALUE1")
       .set("spark.executorEnv.ENV2", "VALUE2")
 

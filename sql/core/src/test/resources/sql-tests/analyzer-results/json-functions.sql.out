@@ -241,7 +241,7 @@ Project [c0#x, c1#x, c2#x, c3#x]
 -- !query
 CREATE TEMPORARY VIEW jsonTable(jsonField, a) AS SELECT * FROM VALUES ('{"a": 1, "b": 2}', 'a')
 -- !query analysis
-CreateViewCommand `jsonTable`, [(jsonField,None), (a,None)], SELECT * FROM VALUES ('{"a": 1, "b": 2}', 'a'), false, false, LocalTempView, true
+CreateViewCommand `jsonTable`, [(jsonField,None), (a,None)], SELECT * FROM VALUES ('{"a": 1, "b": 2}', 'a'), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [col1#x, col2#x]
       +- LocalRelation [col1#x, col2#x]
 
@@ -252,7 +252,7 @@ SELECT json_tuple(jsonField, 'b', CAST(NULL AS STRING), a) FROM jsonTable
 Project [c0#x, c1#x, c2#x]
 +- Generate json_tuple(jsonField#x, b, cast(null as string), a#x), false, [c0#x, c1#x, c2#x]
    +- SubqueryAlias jsontable
-      +- View (`jsonTable`, [jsonField#x,a#x])
+      +- View (`jsonTable`, [jsonField#x, a#x])
          +- Project [cast(col1#x as string) AS jsonField#x, cast(col2#x as string) AS a#x]
             +- Project [col1#x, col2#x]
                +- LocalRelation [col1#x, col2#x]
@@ -428,7 +428,7 @@ Project [schema_of_json({"c1":01, "c2":0.1}, (allowNumericLeadingZeros,true), (p
 -- !query
 select schema_of_json(null)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_NULL",
   "sqlState" : "42K09",
@@ -449,7 +449,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 CREATE TEMPORARY VIEW jsonTable(jsonField, a) AS SELECT * FROM VALUES ('{"a": 1, "b": 2}', 'a')
 -- !query analysis
-CreateViewCommand `jsonTable`, [(jsonField,None), (a,None)], SELECT * FROM VALUES ('{"a": 1, "b": 2}', 'a'), false, false, LocalTempView, true
+CreateViewCommand `jsonTable`, [(jsonField,None), (a,None)], SELECT * FROM VALUES ('{"a": 1, "b": 2}', 'a'), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [col1#x, col2#x]
       +- LocalRelation [col1#x, col2#x]
 
@@ -457,13 +457,13 @@ CreateViewCommand `jsonTable`, [(jsonField,None), (a,None)], SELECT * FROM VALUE
 -- !query
 SELECT schema_of_json(jsonField) FROM jsonTable
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputExpr" : "\"jsonField\"",
-    "inputName" : "json",
+    "inputName" : "`json`",
     "inputType" : "\"STRING\"",
     "sqlExpr" : "\"schema_of_json(jsonField)\""
   },
@@ -487,14 +487,14 @@ Project [json_array_length(null) AS json_array_length(NULL)#x]
 -- !query
 select json_array_length(2)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"2\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"STRING\"",
     "sqlExpr" : "\"json_array_length(2)\""
   },
@@ -620,14 +620,14 @@ Project [json_object_keys(null) AS json_object_keys(NULL)#x]
 -- !query
 select json_object_keys(200)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"200\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"STRING\"",
     "sqlExpr" : "\"json_object_keys(200)\""
   },

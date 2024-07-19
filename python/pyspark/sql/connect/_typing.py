@@ -14,28 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-import sys
-
-if sys.version_info >= (3, 8):
-    from typing import Protocol
-else:
-    from typing_extensions import Protocol
-
 from types import FunctionType
-from typing import Any, Callable, Iterable, Union, Optional, NewType
+from typing import Any, Callable, Iterable, Union, Optional, NewType, Protocol, Tuple, TypeVar
 import datetime
 import decimal
 
 import pyarrow
 from pandas.core.frame import DataFrame as PandasDataFrame
 
-from pyspark.sql.connect.column import Column
+from pyspark.sql.column import Column
 from pyspark.sql.connect.types import DataType
 from pyspark.sql.streaming.state import GroupState
 
 
 ColumnOrName = Union[Column, str]
+ColumnOrName_ = TypeVar("ColumnOrName_", bound=ColumnOrName)
+
+ColumnOrNameOrOrdinal = Union[Column, str, int]
 
 PrimitiveType = Union[bool, float, int, str]
 
@@ -66,6 +61,14 @@ PandasCogroupedMapFunction = Callable[[DataFrameLike, DataFrameLike], DataFrameL
 
 PandasGroupedMapFunctionWithState = Callable[
     [Any, Iterable[DataFrameLike], GroupState], Iterable[DataFrameLike]
+]
+ArrowGroupedMapFunction = Union[
+    Callable[[pyarrow.Table], pyarrow.Table],
+    Callable[[Tuple[pyarrow.Scalar, ...], pyarrow.Table], pyarrow.Table],
+]
+ArrowCogroupedMapFunction = Union[
+    Callable[[pyarrow.Table, pyarrow.Table], pyarrow.Table],
+    Callable[[Tuple[pyarrow.Scalar, ...], pyarrow.Table, pyarrow.Table], pyarrow.Table],
 ]
 
 

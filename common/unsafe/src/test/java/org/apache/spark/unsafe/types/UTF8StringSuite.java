@@ -1,19 +1,19 @@
 /*
-* Licensed to the Apache Software Foundation (ASF) under one or more
-* contributor license agreements.  See the NOTICE file distributed with
-* this work for additional information regarding copyright ownership.
-* The ASF licenses this file to You under the Apache License, Version 2.0
-* (the "License"); you may not use this file except in compliance with
-* the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 package org.apache.spark.unsafe.types;
 
@@ -26,9 +26,9 @@ import java.util.*;
 
 import com.google.common.collect.ImmutableMap;
 import org.apache.spark.unsafe.Platform;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 import static org.apache.spark.unsafe.Platform.BYTE_ARRAY_OFFSET;
 import static org.apache.spark.unsafe.types.UTF8String.*;
@@ -47,7 +47,7 @@ public class UTF8StringSuite {
 
     assertEquals(s1.hashCode(), s2.hashCode());
 
-    assertEquals(0, s1.compareTo(s2));
+    assertEquals(0, s1.binaryCompare(s2));
 
     assertTrue(s1.contains(s2));
     assertTrue(s2.contains(s1));
@@ -93,18 +93,41 @@ public class UTF8StringSuite {
   }
 
   @Test
-  public void compareTo() {
-    assertTrue(fromString("").compareTo(fromString("a")) < 0);
-    assertTrue(fromString("abc").compareTo(fromString("ABC")) > 0);
-    assertTrue(fromString("abc0").compareTo(fromString("abc")) > 0);
-    assertTrue(fromString("abcabcabc").compareTo(fromString("abcabcabc")) == 0);
-    assertTrue(fromString("aBcabcabc").compareTo(fromString("Abcabcabc")) > 0);
-    assertTrue(fromString("Abcabcabc").compareTo(fromString("abcabcabC")) < 0);
-    assertTrue(fromString("abcabcabc").compareTo(fromString("abcabcabC")) > 0);
+  public void binaryCompareTo() {
+    assertTrue(fromString("").binaryCompare(fromString("a")) < 0);
+    assertTrue(fromString("abc").binaryCompare(fromString("ABC")) > 0);
+    assertTrue(fromString("abc0").binaryCompare(fromString("abc")) > 0);
+    assertTrue(fromString("abcabcabc").binaryCompare(fromString("abcabcabc")) == 0);
+    assertTrue(fromString("aBcabcabc").binaryCompare(fromString("Abcabcabc")) > 0);
+    assertTrue(fromString("Abcabcabc").binaryCompare(fromString("abcabcabC")) < 0);
+    assertTrue(fromString("abcabcabc").binaryCompare(fromString("abcabcabC")) > 0);
 
-    assertTrue(fromString("abc").compareTo(fromString("世界")) < 0);
-    assertTrue(fromString("你好").compareTo(fromString("世界")) > 0);
-    assertTrue(fromString("你好123").compareTo(fromString("你好122")) > 0);
+    assertTrue(fromString("abc").binaryCompare(fromString("世界")) < 0);
+    assertTrue(fromString("你好").binaryCompare(fromString("世界")) > 0);
+    assertTrue(fromString("你好123").binaryCompare(fromString("你好122")) > 0);
+  }
+
+  @Test
+  public void lowercaseComparison() {
+    // SPARK-47693: Test optimized lowercase comparison of UTF8String instances
+    // ASCII
+    assertEquals(fromString("aaa").compareLowerCase(fromString("AAA")), 0);
+    assertTrue(fromString("aaa").compareLowerCase(fromString("AAAA")) < 0);
+    assertTrue(fromString("AAA").compareLowerCase(fromString("aaaa")) < 0);
+    assertTrue(fromString("a").compareLowerCase(fromString("B")) < 0);
+    assertTrue(fromString("b").compareLowerCase(fromString("A")) > 0);
+    assertEquals(fromString("aAa").compareLowerCase(fromString("AaA")), 0);
+    assertTrue(fromString("abcd").compareLowerCase(fromString("abC")) > 0);
+    assertTrue(fromString("ABC").compareLowerCase(fromString("abcd")) < 0);
+    assertEquals(fromString("abcd").compareLowerCase(fromString("abcd")), 0);
+    // non-ASCII
+    assertEquals(fromString("ü").compareLowerCase(fromString("Ü")), 0);
+    assertEquals(fromString("Äü").compareLowerCase(fromString("äÜ")), 0);
+    assertTrue(fromString("a").compareLowerCase(fromString("ä")) < 0);
+    assertTrue(fromString("a").compareLowerCase(fromString("Ä")) < 0);
+    assertTrue(fromString("A").compareLowerCase(fromString("ä")) < 0);
+    assertTrue(fromString("bä").compareLowerCase(fromString("aü")) > 0);
+    assertTrue(fromString("bxxxxxxxxxx").compareLowerCase(fromString("bü")) < 0);
   }
 
   protected static void testUpperandLower(String upper, String lower) {
@@ -228,6 +251,10 @@ public class UTF8StringSuite {
   public void trims() {
     assertEquals(fromString("1"), fromString("1").trim());
     assertEquals(fromString("1"), fromString("1\t").trimAll());
+
+    assertEquals(fromString("1中文").toString(), fromString("1中文").trimAll().toString());
+    assertEquals(fromString("1"), fromString("1\u0003").trimAll());
+    assertEquals(fromString("1"), fromString("1\u007F").trimAll());
 
     assertEquals(fromString("hello"), fromString("  hello ").trim());
     assertEquals(fromString("hello "), fromString("  hello ").trimLeft());
@@ -678,7 +705,7 @@ public class UTF8StringSuite {
   }
 
   @Test
-  public void testToShort() throws IOException {
+  public void testToShort() {
     Map<String, Short> inputToExpectedOutput = new HashMap<>();
     inputToExpectedOutput.put("1", (short) 1);
     inputToExpectedOutput.put("+1", (short) 1);
@@ -696,7 +723,7 @@ public class UTF8StringSuite {
 
     IntWrapper wrapper = new IntWrapper();
     for (Map.Entry<String, Short> entry : inputToExpectedOutput.entrySet()) {
-      assertTrue(entry.getKey(), UTF8String.fromString(entry.getKey()).toShort(wrapper));
+      assertTrue(UTF8String.fromString(entry.getKey()).toShort(wrapper), entry.getKey());
       assertEquals((short) entry.getValue(), wrapper.value);
     }
 
@@ -704,12 +731,12 @@ public class UTF8StringSuite {
       Arrays.asList("", "  ", "null", "NULL", "\n", "~1212121", "3276700");
 
     for (String negativeInput : negativeInputs) {
-      assertFalse(negativeInput, UTF8String.fromString(negativeInput).toShort(wrapper));
+      assertFalse(UTF8String.fromString(negativeInput).toShort(wrapper), negativeInput);
     }
   }
 
   @Test
-  public void testToByte() throws IOException {
+  public void testToByte() {
     Map<String, Byte> inputToExpectedOutput = new HashMap<>();
     inputToExpectedOutput.put("1", (byte) 1);
     inputToExpectedOutput.put("+1",(byte)  1);
@@ -727,7 +754,7 @@ public class UTF8StringSuite {
 
     IntWrapper intWrapper = new IntWrapper();
     for (Map.Entry<String, Byte> entry : inputToExpectedOutput.entrySet()) {
-      assertTrue(entry.getKey(), UTF8String.fromString(entry.getKey()).toByte(intWrapper));
+      assertTrue(UTF8String.fromString(entry.getKey()).toByte(intWrapper), entry.getKey());
       assertEquals((byte) entry.getValue(), intWrapper.value);
     }
 
@@ -735,12 +762,12 @@ public class UTF8StringSuite {
       Arrays.asList("", "  ", "null", "NULL", "\n", "~1212121", "12345678901234567890");
 
     for (String negativeInput : negativeInputs) {
-      assertFalse(negativeInput, UTF8String.fromString(negativeInput).toByte(intWrapper));
+      assertFalse(UTF8String.fromString(negativeInput).toByte(intWrapper), negativeInput);
     }
   }
 
   @Test
-  public void testToInt() throws IOException {
+  public void testToInt() {
     Map<String, Integer> inputToExpectedOutput = new HashMap<>();
     inputToExpectedOutput.put("1", 1);
     inputToExpectedOutput.put("+1", 1);
@@ -758,7 +785,7 @@ public class UTF8StringSuite {
 
     IntWrapper intWrapper = new IntWrapper();
     for (Map.Entry<String, Integer> entry : inputToExpectedOutput.entrySet()) {
-      assertTrue(entry.getKey(), UTF8String.fromString(entry.getKey()).toInt(intWrapper));
+      assertTrue(UTF8String.fromString(entry.getKey()).toInt(intWrapper), entry.getKey());
       assertEquals((int) entry.getValue(), intWrapper.value);
     }
 
@@ -766,12 +793,12 @@ public class UTF8StringSuite {
       Arrays.asList("", "  ", "null", "NULL", "\n", "~1212121", "12345678901234567890");
 
     for (String negativeInput : negativeInputs) {
-      assertFalse(negativeInput, UTF8String.fromString(negativeInput).toInt(intWrapper));
+      assertFalse(UTF8String.fromString(negativeInput).toInt(intWrapper), negativeInput);
     }
   }
 
   @Test
-  public void testToLong() throws IOException {
+  public void testToLong() {
     Map<String, Long> inputToExpectedOutput = new HashMap<>();
     inputToExpectedOutput.put("1", 1L);
     inputToExpectedOutput.put("+1", 1L);
@@ -789,7 +816,7 @@ public class UTF8StringSuite {
 
     LongWrapper wrapper = new LongWrapper();
     for (Map.Entry<String, Long> entry : inputToExpectedOutput.entrySet()) {
-      assertTrue(entry.getKey(), UTF8String.fromString(entry.getKey()).toLong(wrapper));
+      assertTrue(UTF8String.fromString(entry.getKey()).toLong(wrapper), entry.getKey());
       assertEquals((long) entry.getValue(), wrapper.value);
     }
 
@@ -797,7 +824,7 @@ public class UTF8StringSuite {
         "1234567890123456789012345678901234");
 
     for (String negativeInput : negativeInputs) {
-      assertFalse(negativeInput, UTF8String.fromString(negativeInput).toLong(wrapper));
+      assertFalse(UTF8String.fromString(negativeInput).toLong(wrapper), negativeInput);
     }
   }
 

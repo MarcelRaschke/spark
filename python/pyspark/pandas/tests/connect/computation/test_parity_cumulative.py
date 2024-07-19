@@ -16,66 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.computation.test_cumulative import FrameCumulativeMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
 class FrameParityCumulativeTests(
-    FrameCumulativeMixin, PandasOnSparkTestUtils, ReusedConnectTestCase
+    FrameCumulativeMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
 ):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cummax(self):
-        super().test_cummax()
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cummax_multiindex_columns(self):
-        super().test_cummax_multiindex_columns()
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cummin(self):
-        super().test_cummin()
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cummin_multiindex_columns(self):
-        super().test_cummin_multiindex_columns()
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cumprod(self):
-        super().test_cumprod()
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cumprod_multiindex_columns(self):
-        super().test_cumprod_multiindex_columns()
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cumsum(self):
-        super().test_cumsum()
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_cumsum_multiindex_columns(self):
-        super().test_cumsum_multiindex_columns()
+    pass
 
 
 if __name__ == "__main__":

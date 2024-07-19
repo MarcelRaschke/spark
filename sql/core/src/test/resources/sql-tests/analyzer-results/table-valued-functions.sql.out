@@ -4,9 +4,10 @@ select * from dummy(3)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2308",
+  "errorClass" : "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
+  "sqlState" : "42883",
   "messageParameters" : {
-    "name" : "dummy"
+    "name" : "`dummy`"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -22,21 +23,21 @@ org.apache.spark.sql.AnalysisException
 select * from range(6 + cos(3))
 -- !query analysis
 Project [id#xL]
-+- Range (0, 5, step=1, splits=None)
++- Range (0, 5, step=1)
 
 
 -- !query
 select * from range(5, 10)
 -- !query analysis
 Project [id#xL]
-+- Range (5, 10, step=1, splits=None)
++- Range (5, 10, step=1)
 
 
 -- !query
 select * from range(0, 10, 2)
 -- !query analysis
 Project [id#xL]
-+- Range (0, 10, step=2, splits=None)
++- Range (0, 10, step=2)
 
 
 -- !query
@@ -80,7 +81,7 @@ org.apache.spark.sql.AnalysisException
     "functionName" : "`range`",
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "\"BIGINT\""
   },
   "queryContext" : [ {
@@ -104,7 +105,7 @@ org.apache.spark.sql.AnalysisException
     "functionName" : "`range`",
     "inputSql" : "\"array(1, 2, 3)\"",
     "inputType" : "\"ARRAY<INT>\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "\"BIGINT\""
   },
   "queryContext" : [ {
@@ -141,7 +142,7 @@ org.apache.spark.sql.AnalysisException
 select * from RaNgE(2)
 -- !query analysis
 Project [id#xL]
-+- Range (0, 2, step=1, splits=None)
++- Range (0, 2, step=1)
 
 
 -- !query
@@ -150,7 +151,51 @@ select i from range(0, 2) t(i)
 Project [i#xL]
 +- SubqueryAlias t
    +- Project [id#xL AS i#xL]
-      +- Range (0, 2, step=1, splits=None)
+      +- Range (0, 2, step=1)
+
+
+-- !query
+select * from range(0, (select 1))
+-- !query analysis
+org.apache.spark.sql.AnalysisException
+{
+  "errorClass" : "NON_FOLDABLE_ARGUMENT",
+  "sqlState" : "42K08",
+  "messageParameters" : {
+    "funcName" : "`range`",
+    "paramName" : "`end`",
+    "paramType" : "\"BIGINT\""
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 15,
+    "stopIndex" : 34,
+    "fragment" : "range(0, (select 1))"
+  } ]
+}
+
+
+-- !query
+select * from values (0, 1) t(c1, c2), lateral range(0, c2)
+-- !query analysis
+org.apache.spark.sql.AnalysisException
+{
+  "errorClass" : "NON_FOLDABLE_ARGUMENT",
+  "sqlState" : "42K08",
+  "messageParameters" : {
+    "funcName" : "`range`",
+    "paramName" : "`end`",
+    "paramType" : "\"BIGINT\""
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 48,
+    "stopIndex" : 59,
+    "fragment" : "range(0, c2)"
+  } ]
+}
 
 
 -- !query
@@ -206,16 +251,22 @@ Project [k#x, v#x]
 
 
 -- !query
+select * from explode(array(rand(0)))
+-- !query analysis
+[Analyzer test output redacted due to nondeterminism]
+
+
+-- !query
 select * from explode(null)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"explode(NULL)\""
   },
@@ -232,14 +283,14 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select * from explode(null) t(c1)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"explode(NULL)\""
   },
@@ -256,14 +307,14 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select * from explode(1)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"explode(1)\""
   },
@@ -306,7 +357,7 @@ select * from explode(explode(array(1)))
 org.apache.spark.sql.AnalysisException
 {
   "errorClass" : "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
-  "sqlState" : "0A000",
+  "sqlState" : "42K0E",
   "messageParameters" : {
     "expression" : "\"explode(explode(array(1)))\""
   },
@@ -325,10 +376,11 @@ select * from explode(array(1, 2)) t(c1, c2)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "2",
-    "funcName" : "explode",
+    "funcName" : "`explode`",
     "outColsNum" : "1"
   },
   "queryContext" : [ {
@@ -378,7 +430,7 @@ select * from range(2) join explode(array(1, 2))
 -- !query analysis
 Project [id#xL, col#x]
 +- Join Inner
-   :- Range (0, 2, step=1, splits=None)
+   :- Range (0, 2, step=1)
    +- Generate explode(array(1, 2)), false, [col#x]
       +- OneRowRelation
 
@@ -388,7 +440,7 @@ select * from range(2) join explode_outer(array())
 -- !query analysis
 Project [id#xL, col#x]
 +- Join Inner
-   :- Range (0, 2, step=1, splits=None)
+   :- Range (0, 2, step=1)
    +- Generate explode(array()), true, [col#x]
       +- OneRowRelation
 
@@ -422,14 +474,14 @@ Project [col1#x, col2#x]
 -- !query
 select * from inline(null)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"ARRAY<STRUCT>\"",
     "sqlExpr" : "\"inline(NULL)\""
   },
@@ -448,10 +500,11 @@ select * from inline(array(struct(1, 2), struct(2, 3))) t(a, b, c)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "3",
-    "funcName" : "inline",
+    "funcName" : "`inline`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -535,14 +588,14 @@ Project [pos#x, k#x, v#x]
 -- !query
 select * from posexplode(1)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"posexplode(1)\""
   },
@@ -585,7 +638,7 @@ select * from posexplode(explode(array(1)))
 org.apache.spark.sql.AnalysisException
 {
   "errorClass" : "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
-  "sqlState" : "0A000",
+  "sqlState" : "42K0E",
   "messageParameters" : {
     "expression" : "\"posexplode(explode(array(1)))\""
   },
@@ -604,10 +657,11 @@ select * from posexplode(array(1, 2)) t(x)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "1",
-    "funcName" : "posexplode",
+    "funcName" : "`posexplode`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -729,7 +783,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select * from json_tuple('{"a": 1}', 1)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.NON_STRING_TYPE",
   "sqlState" : "42K09",
@@ -750,7 +804,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select * from json_tuple('{"a": 1}', null)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.NON_STRING_TYPE",
   "sqlState" : "42K09",
@@ -773,10 +827,11 @@ select * from json_tuple('{"a": 1, "b": 2}', 'a', 'b') AS t(x)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "1",
-    "funcName" : "json_tuple",
+    "funcName" : "`json_tuple`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -866,10 +921,11 @@ select * from stack(2, 1, 2, 3) t(a, b, c)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "3",
-    "funcName" : "stack",
+    "funcName" : "`stack`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -885,7 +941,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select * from stack(2, 1, '1.1', 'a', 2, 2.2, 'b')
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES",
   "sqlState" : "42K09",
@@ -913,7 +969,7 @@ select * from stack(2, explode(array(1, 2, 3)))
 org.apache.spark.sql.AnalysisException
 {
   "errorClass" : "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
-  "sqlState" : "0A000",
+  "sqlState" : "42K0E",
   "messageParameters" : {
     "expression" : "\"stack(2, explode(array(1, 2, 3)))\""
   },

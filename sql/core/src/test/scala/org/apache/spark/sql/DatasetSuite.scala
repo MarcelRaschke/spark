@@ -20,6 +20,8 @@ package org.apache.spark.sql
 import java.io.{Externalizable, ObjectInput, ObjectOutput}
 import java.sql.{Date, Timestamp}
 
+import scala.collection.immutable.HashSet
+import scala.reflect.ClassTag
 import scala.util.Random
 
 import org.apache.hadoop.fs.{Path, PathFilter}
@@ -27,14 +29,16 @@ import org.scalatest.Assertions._
 import org.scalatest.exceptions.TestFailedException
 import org.scalatest.prop.TableDrivenPropertyChecks._
 
-import org.apache.spark.{SparkConf, SparkException, TaskContext}
+import org.apache.spark.{SparkConf, SparkRuntimeException, SparkUnsupportedOperationException, TaskContext}
 import org.apache.spark.TestUtils.withListener
 import org.apache.spark.internal.config.MAX_RESULT_SIZE
 import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql.catalyst.{FooClassWithEnum, FooEnum, ScroogeLikeExample}
-import org.apache.spark.sql.catalyst.encoders.{OuterScopes, RowEncoder}
-import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema
+import org.apache.spark.sql.catalyst.encoders.{AgnosticEncoders, ExpressionEncoder, OuterScopes}
+import org.apache.spark.sql.catalyst.encoders.AgnosticEncoders.BoxedIntEncoder
+import org.apache.spark.sql.catalyst.expressions.{CodegenObjectFactoryMode, GenericRowWithSchema}
 import org.apache.spark.sql.catalyst.plans.{LeftAnti, LeftSemi}
+import org.apache.spark.sql.catalyst.trees.DataFrameQueryContext
 import org.apache.spark.sql.catalyst.util.sideBySide
 import org.apache.spark.sql.execution.{LogicalRDD, RDDScanExec, SQLExecution}
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
@@ -45,6 +49,8 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
+import org.apache.spark.storage.StorageLevel
+import org.apache.spark.util.ArrayImplicits._
 
 case class TestDataPoint(x: Int, y: Double, s: String, t: TestDataPoint2)
 case class TestDataPoint2(x: Int, s: String)
@@ -66,7 +72,7 @@ class DatasetSuite extends QueryTest
   with AdaptiveSparkPlanHelper {
   import testImplicits._
 
-  private implicit val ordering = Ordering.by((c: ClassData) => c.a -> c.b)
+  private implicit val ordering: Ordering[ClassData] = Ordering.by((c: ClassData) => c.a -> c.b)
 
   test("checkAnswer should compare map correctly") {
     val data = Seq((1, "2", Map(1 -> 2, 2 -> 1)))
@@ -267,6 +273,13 @@ class DatasetSuite extends QueryTest
     checkDatasetUnorderly(
       ds,
       (ClassData("one", 2), 1L), (ClassData("two", 3), 1L))
+  }
+
+  test("SPARK-45896: seq of option of seq") {
+    val ds = Seq(DataSeqOptSeq(Seq(Some(Seq(0))))).toDS()
+    checkDataset(
+      ds,
+      DataSeqOptSeq(Seq(Some(List(0)))))
   }
 
   test("select") {
@@ -602,8 +615,9 @@ class DatasetSuite extends QueryTest
           (g, iter) => Iterator(g, iter.mkString(", "))
         }
       },
-      errorClass = "_LEGACY_ERROR_TEMP_1020",
-      parameters = Map("elem" -> "'*'", "prettyName" -> "MapGroups"))
+      errorClass = "INVALID_USAGE_OF_STAR_OR_REGEX",
+      parameters = Map("elem" -> "'*'", "prettyName" -> "MapGroups"),
+      context = ExpectedContext(fragment = "$", getCurrentClassCallSitePattern))
   }
 
   test("groupBy function, flatMapSorted") {
@@ -630,8 +644,9 @@ class DatasetSuite extends QueryTest
           (g, iter) => Iterator(g, iter.mkString(", "))
         }
       },
-      errorClass = "_LEGACY_ERROR_TEMP_1020",
-      parameters = Map("elem" -> "'*'", "prettyName" -> "MapGroups"))
+      errorClass = "INVALID_USAGE_OF_STAR_OR_REGEX",
+      parameters = Map("elem" -> "'*'", "prettyName" -> "MapGroups"),
+      context = ExpectedContext(fragment = "$", getCurrentClassCallSitePattern))
   }
 
   test("groupBy, flatMapSorted desc") {
@@ -666,6 +681,27 @@ class DatasetSuite extends QueryTest
       "b", "[b,2,1], [b,1,2]",
       "c", "[c,1,1]"
     )
+  }
+
+  test("groupByKey, keyAs - duplicates") {
+    val ds = spark
+      .range(10)
+      .as[Long]
+      .groupByKey(id => K2(id % 2, id % 4))
+      .keyAs[K1]
+      .flatMapGroups((_, it) => Seq(it.toSeq.size))
+    checkDatasetUnorderly(ds, 3, 2, 3, 2)
+  }
+
+  test("groupByKey, keyAs, keys - duplicates") {
+    val result = spark
+      .range(10)
+      .as[Long]
+      .groupByKey(id => K2(id % 2, id % 4))
+      .keyAs[K1]
+      .keys
+      .collect()
+    assert(result.sortBy(_.a) === Seq(K1(0), K1(0), K1(1), K1(1)))
   }
 
   test("groupBy function, mapValues, flatMap") {
@@ -895,6 +931,32 @@ class DatasetSuite extends QueryTest
     }
   }
 
+  test("SPARK-43781: cogroup two datasets derived from the same source") {
+    val inputType = StructType(Array(StructField("id", LongType, false),
+      StructField("type", StringType, false)))
+    val keyType = StructType(Array(StructField("id", LongType, false)))
+
+    val inputRows = new java.util.ArrayList[Row]()
+    inputRows.add(Row(1L, "foo"))
+    inputRows.add(Row(1L, "bar"))
+    inputRows.add(Row(2L, "foo"))
+    val input = spark.createDataFrame(inputRows, inputType)
+    val fooGroups = input.filter("type = 'foo'").groupBy("id").as(ExpressionEncoder(keyType),
+      ExpressionEncoder(inputType))
+    val barGroups = input.filter("type = 'bar'").groupBy("id").as(ExpressionEncoder(keyType),
+      ExpressionEncoder(inputType))
+
+    val result = fooGroups.cogroup(barGroups) { case (row, iterator, iterator1) =>
+      iterator.toSeq ++ iterator1.toSeq
+    }(ExpressionEncoder(inputType)).collect()
+    assert(result.length == 3)
+
+    val result2 = fooGroups.cogroupSorted(barGroups)($"id")($"id") {
+      case (row, iterator, iterator1) => iterator.toSeq ++ iterator1.toSeq
+    }(ExpressionEncoder(inputType)).collect()
+    assert(result2.length == 3)
+  }
+
   test("SPARK-34806: observation on datasets") {
     val namedObservation = Observation("named")
     val unnamedObservation = Observation()
@@ -968,10 +1030,31 @@ class DatasetSuite extends QueryTest
     val observed_df = spark.range(100).observe(
       namedObservation, percentile_approx($"id", lit(0.5), lit(100)).as("percentile_approx_val"))
 
-    observed_df.foreach(r => f)
+    observed_df.foreach(r => f())
     val expected = Map("percentile_approx_val" -> 49)
 
     assert(namedObservation.get === expected)
+  }
+
+  test("SPARK-45656: named observations with the same name on different datasets") {
+    val namedObservation1 = Observation("named")
+    val df1 = spark.range(50)
+    val observed_df1 = df1.observe(
+      namedObservation1, count(lit(1)).as("count"))
+
+    val namedObservation2 = Observation("named")
+    val df2 = spark.range(100)
+    val observed_df2 = df2.observe(
+      namedObservation2, count(lit(1)).as("count"))
+
+    observed_df1.collect()
+    observed_df2.collect()
+
+    val expected1 = Map("count" -> 50)
+    val expected2 = Map("count" -> 100)
+
+    assert(namedObservation1.get === expected1)
+    assert(namedObservation2.get === expected2)
   }
 
   test("sample with replacement") {
@@ -1039,9 +1122,9 @@ class DatasetSuite extends QueryTest
     ).toDF("id", "stringData")
     val sampleDF = df.sample(false, 0.7, 50)
     // After sampling, sampleDF doesn't contain id=a.
-    assert(!sampleDF.select("id").as[Int].collect.contains(a))
+    assert(!sampleDF.select("id").as[Int].collect().contains(a))
     // simpleUdf should not encounter id=a.
-    checkAnswer(sampleDF.select(simpleUdf($"id")), List.fill(sampleDF.count.toInt)(Row(a)))
+    checkAnswer(sampleDF.select(simpleUdf($"id")), List.fill(sampleDF.count().toInt)(Row(a)))
   }
 
   test("SPARK-11436: we should rebind right encoder when join 2 datasets") {
@@ -1116,7 +1199,7 @@ class DatasetSuite extends QueryTest
   }
 
   test("SPARK-14696: implicit encoders for boxed types") {
-    assert(spark.range(1).map { i => i : java.lang.Long }.head == 0L)
+    assert(spark.range(1).map { i => i : java.lang.Long }.head() == 0L)
   }
 
   test("SPARK-11894: Incorrect results are returned when using null") {
@@ -1168,11 +1251,10 @@ class DatasetSuite extends QueryTest
     // Shouldn't throw runtime exception when parent object (`ClassData`) is null
     assert(buildDataset(Row(null)).collect() === Array(NestedStruct(null)))
 
-    val message = intercept[RuntimeException] {
+    // Just check the error class here to avoid flakiness due to different parameters.
+    assert(intercept[SparkRuntimeException] {
       buildDataset(Row(Row("hello", null))).collect()
-    }.getMessage
-
-    assert(message.contains("Null value appeared in non-nullable field"))
+    }.getErrorClass == "EXPRESSION_DECODING_FAILED")
   }
 
   test("SPARK-12478: top level null field") {
@@ -1286,11 +1368,11 @@ class DatasetSuite extends QueryTest
   test("dataset.rdd with generic case class") {
     val ds = Seq(Generic(1, 1.0), Generic(2, 2.0)).toDS()
     val ds2 = ds.map(g => Generic(g.id, g.value))
-    assert(ds.rdd.map(r => r.id).count === 2)
-    assert(ds2.rdd.map(r => r.id).count === 2)
+    assert(ds.rdd.map(r => r.id).count() === 2)
+    assert(ds2.rdd.map(r => r.id).count() === 2)
 
     val ds3 = ds.map(g => java.lang.Long.valueOf(g.id))
-    assert(ds3.rdd.map(r => r).count === 2)
+    assert(ds3.rdd.map(r => r).count() === 2)
   }
 
   test("runtime null check for RowEncoder") {
@@ -1301,7 +1383,7 @@ class DatasetSuite extends QueryTest
       } else {
         Row(l)
       }
-    })(RowEncoder(schema))
+    })(ExpressionEncoder(schema))
 
     val message = intercept[Exception] {
       df.collect()
@@ -1312,10 +1394,11 @@ class DatasetSuite extends QueryTest
   test("row nullability mismatch") {
     val schema = new StructType().add("a", StringType, true).add("b", StringType, false)
     val rdd = spark.sparkContext.parallelize(Row(null, "123") :: Row("234", null) :: Nil)
-    val message = intercept[Exception] {
+    val ex = intercept[SparkRuntimeException] {
       spark.createDataFrame(rdd, schema).collect()
-    }.getMessage
-    assert(message.contains("The 1th field 'b' of input row cannot be null"))
+    }
+    assert(ex.getErrorClass == "EXPRESSION_ENCODING_FAILED")
+    assert(ex.getCause.getMessage.contains("The 1th field 'b' of input row cannot be null"))
   }
 
   test("createTempView") {
@@ -1336,25 +1419,27 @@ class DatasetSuite extends QueryTest
     dataset.sparkSession.catalog.dropTempView("tempView")
 
     withDatabase("test_db") {
-      withSQLConf(SQLConf.ALLOW_TEMP_VIEW_CREATION_WITH_MULTIPLE_NAME_PARTS.key -> "false") {
-        spark.sql("CREATE DATABASE IF NOT EXISTS test_db")
-        val e = intercept[AnalysisException](
-          dataset.createTempView("test_db.tempView"))
-        checkError(e,
-          errorClass = "TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS",
-          parameters = Map("actualName" -> "test_db.tempView"))
-      }
+      withTempView("tempView") {
+        withSQLConf(SQLConf.ALLOW_TEMP_VIEW_CREATION_WITH_MULTIPLE_NAME_PARTS.key -> "false") {
+          spark.sql("CREATE DATABASE IF NOT EXISTS test_db")
+          val e = intercept[AnalysisException](
+            dataset.createTempView("test_db.tempView"))
+          checkError(e,
+            errorClass = "TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS",
+            parameters = Map("actualName" -> "test_db.tempView"))
+        }
 
-      withSQLConf(SQLConf.ALLOW_TEMP_VIEW_CREATION_WITH_MULTIPLE_NAME_PARTS.key -> "true") {
-          dataset.createTempView("test_db.tempView")
-          assert(spark.catalog.tableExists("tempView"))
+        withSQLConf(SQLConf.ALLOW_TEMP_VIEW_CREATION_WITH_MULTIPLE_NAME_PARTS.key -> "true") {
+            dataset.createTempView("test_db.tempView")
+            assert(spark.catalog.tableExists("tempView"))
+        }
       }
     }
   }
 
   test("SPARK-15381: physical object operator should define `reference` correctly") {
     val df = Seq(1 -> 2).toDF("a", "b")
-    checkAnswer(df.map(row => row)(RowEncoder(df.schema)).select("b", "a"), Row(2, 1))
+    checkAnswer(df.map(row => row)(ExpressionEncoder(df.schema)).select("b", "a"), Row(2, 1))
   }
 
   private def checkShowString[T](ds: Dataset[T], expected: String): Unit = {
@@ -1507,9 +1592,8 @@ class DatasetSuite extends QueryTest
   }
 
   test("Dataset should throw RuntimeException if top-level product input object is null") {
-    val e = intercept[RuntimeException](Seq(ClassData("a", 1), null).toDS())
-    assert(e.getMessage.contains("Null value appeared in non-nullable field"))
-    assert(e.getMessage.contains("top level Product or row object"))
+    val e = intercept[SparkRuntimeException](Seq(ClassData("a", 1), null).toDS())
+    assert(e.getErrorClass == "EXPRESSION_ENCODING_FAILED")
   }
 
   test("dropDuplicates") {
@@ -1564,7 +1648,7 @@ class DatasetSuite extends QueryTest
       Route("b", "a", 1),
       Route("b", "a", 5),
       Route("b", "c", 6))
-    val ds = sparkContext.parallelize(data).toDF.as[Route]
+    val ds = sparkContext.parallelize(data.toImmutableArraySeq).toDF().as[Route]
 
     val grouped = ds.map(r => GroupedRoutes(r.src, r.dest, Seq(r)))
       .groupByKey(r => (r.src, r.dest))
@@ -1599,15 +1683,15 @@ class DatasetSuite extends QueryTest
   }
 
   test("SPARK-18284: Serializer should have correct nullable value") {
-    val df1 = Seq(1, 2, 3, 4).toDF
+    val df1 = Seq(1, 2, 3, 4).toDF()
     assert(df1.schema(0).nullable == false)
-    val df2 = Seq(Integer.valueOf(1), Integer.valueOf(2)).toDF
+    val df2 = Seq(Integer.valueOf(1), Integer.valueOf(2)).toDF()
     assert(df2.schema(0).nullable)
 
-    val df3 = Seq(Seq(1, 2), Seq(3, 4)).toDF
+    val df3 = Seq(Seq(1, 2), Seq(3, 4)).toDF()
     assert(df3.schema(0).nullable)
     assert(df3.schema(0).dataType.asInstanceOf[ArrayType].containsNull == false)
-    val df4 = Seq(Seq("a", "b"), Seq("c", "d")).toDF
+    val df4 = Seq(Seq("a", "b"), Seq("c", "d")).toDF()
     assert(df4.schema(0).nullable)
     assert(df4.schema(0).dataType.asInstanceOf[ArrayType].containsNull)
 
@@ -1636,7 +1720,7 @@ class DatasetSuite extends QueryTest
     assert(df10.schema(0).dataType.asInstanceOf[MapType].valueContainsNull)
 
     val df11 = Seq(TestDataPoint(1, 2.2, "a", null),
-                   TestDataPoint(3, 4.4, "null", (TestDataPoint2(33, "b")))).toDF
+      TestDataPoint(3, 4.4, "null", (TestDataPoint2(33, "b")))).toDF()
     assert(df11.schema(0).nullable == false)
     assert(df11.schema(1).nullable == false)
     assert(df11.schema(2).nullable)
@@ -1752,11 +1836,11 @@ class DatasetSuite extends QueryTest
     val arrayLong = Array(1.toLong, 2.toLong, 3.toLong)
     val arrayDouble = Array(1.1, 2.2, 3.3)
     val arrayString = Array("a", "b", "c")
-    val dsByte = sparkContext.parallelize(Seq(arrayByte), 1).toDS.map(e => e)
-    val dsInt = sparkContext.parallelize(Seq(arrayInt), 1).toDS.map(e => e)
-    val dsLong = sparkContext.parallelize(Seq(arrayLong), 1).toDS.map(e => e)
-    val dsDouble = sparkContext.parallelize(Seq(arrayDouble), 1).toDS.map(e => e)
-    val dsString = sparkContext.parallelize(Seq(arrayString), 1).toDS.map(e => e)
+    val dsByte = sparkContext.parallelize(Seq(arrayByte), 1).toDS().map(e => e)
+    val dsInt = sparkContext.parallelize(Seq(arrayInt), 1).toDS().map(e => e)
+    val dsLong = sparkContext.parallelize(Seq(arrayLong), 1).toDS().map(e => e)
+    val dsDouble = sparkContext.parallelize(Seq(arrayDouble), 1).toDS().map(e => e)
+    val dsString = sparkContext.parallelize(Seq(arrayString), 1).toDS().map(e => e)
     checkDataset(dsByte, arrayByte)
     checkDataset(dsInt, arrayInt)
     checkDataset(dsLong, arrayLong)
@@ -1776,44 +1860,47 @@ class DatasetSuite extends QueryTest
 
   test("SPARK-18717: code generation works for both scala.collection.Map" +
     " and scala.collection.immutable.Map") {
-    val ds = Seq(WithImmutableMap("hi", Map(42L -> "foo"))).toDS
+    val ds = Seq(WithImmutableMap("hi", Map(42L -> "foo"))).toDS()
     checkDataset(ds.map(t => t), WithImmutableMap("hi", Map(42L -> "foo")))
 
-    val ds2 = Seq(WithMap("hi", Map(42L -> "foo"))).toDS
+    val ds2 = Seq(WithMap("hi", Map(42L -> "foo"))).toDS()
     checkDataset(ds2.map(t => t), WithMap("hi", Map(42L -> "foo")))
   }
 
   test("SPARK-18746: add implicit encoder for BigDecimal, date, timestamp") {
     // For this implicit encoder, 18 is the default scale
-    assert(spark.range(1).map { x => new java.math.BigDecimal(1) }.head ==
+    assert(spark.range(1).map { x => new java.math.BigDecimal(1) }.head() ==
       new java.math.BigDecimal(1).setScale(18))
 
-    assert(spark.range(1).map { x => scala.math.BigDecimal(1, 18) }.head ==
+    assert(spark.range(1).map { x => scala.math.BigDecimal(1, 18) }.head() ==
       scala.math.BigDecimal(1, 18))
 
-    assert(spark.range(1).map { x => java.sql.Date.valueOf("2016-12-12") }.head ==
+    assert(spark.range(1).map { x => java.sql.Date.valueOf("2016-12-12") }.head() ==
       java.sql.Date.valueOf("2016-12-12"))
 
-    assert(spark.range(1).map { x => new java.sql.Timestamp(100000) }.head ==
+    assert(spark.range(1).map { x => new java.sql.Timestamp(100000) }.head() ==
       new java.sql.Timestamp(100000))
   }
 
   test("SPARK-19896: cannot have circular references in case class") {
-    val errMsg1 = intercept[UnsupportedOperationException] {
-      Seq(CircularReferenceClassA(null)).toDS
-    }
-    assert(errMsg1.getMessage.startsWith("cannot have circular references in class, but got the " +
-      "circular reference of class"))
-    val errMsg2 = intercept[UnsupportedOperationException] {
-      Seq(CircularReferenceClassC(null)).toDS
-    }
-    assert(errMsg2.getMessage.startsWith("cannot have circular references in class, but got the " +
-      "circular reference of class"))
-    val errMsg3 = intercept[UnsupportedOperationException] {
-      Seq(CircularReferenceClassD(null)).toDS
-    }
-    assert(errMsg3.getMessage.startsWith("cannot have circular references in class, but got the " +
-      "circular reference of class"))
+    checkError(
+      exception = intercept[SparkUnsupportedOperationException] {
+        Seq(CircularReferenceClassA(null)).toDS()
+      },
+      errorClass = "_LEGACY_ERROR_TEMP_2139",
+      parameters = Map("t" -> "org.apache.spark.sql.CircularReferenceClassA"))
+    checkError(
+      exception = intercept[SparkUnsupportedOperationException] {
+        Seq(CircularReferenceClassC(null)).toDS()
+      },
+      errorClass = "_LEGACY_ERROR_TEMP_2139",
+      parameters = Map("t" -> "org.apache.spark.sql.CircularReferenceClassC"))
+    checkError(
+      exception = intercept[SparkUnsupportedOperationException] {
+        Seq(CircularReferenceClassD(null)).toDS()
+      },
+      errorClass = "_LEGACY_ERROR_TEMP_2139",
+      parameters = Map("t" -> "org.apache.spark.sql.CircularReferenceClassD"))
   }
 
   test("SPARK-20125: option of map") {
@@ -1822,14 +1909,21 @@ class DatasetSuite extends QueryTest
   }
 
   test("SPARK-20399: do not unescaped regex pattern when ESCAPED_STRING_LITERALS is enabled") {
-    withSQLConf(SQLConf.ESCAPED_STRING_LITERALS.key -> "true") {
-      val data = Seq("\u0020\u0021\u0023", "abc")
-      val df = data.toDF()
-      val rlike1 = df.filter("value rlike '^\\x20[\\x20-\\x23]+$'")
-      val rlike2 = df.filter($"value".rlike("^\\x20[\\x20-\\x23]+$"))
-      val rlike3 = df.filter("value rlike '^\\\\x20[\\\\x20-\\\\x23]+$'")
-      checkAnswer(rlike1, rlike2)
-      assert(rlike3.count() == 0)
+    val df = Seq("\u0020\u0021\u0023", "abc").toDF()
+
+    Seq(
+      true ->
+        ("value rlike '^\\x20[\\x20-\\x23]+$'", "value rlike '^\\\\x20[\\\\x20-\\\\x23]+$'"),
+      false ->
+        ("value rlike r'^\\x20[\\x20-\\x23]+$'", "value rlike r'^\\\\x20[\\\\x20-\\\\x23]+$'")
+    ).foreach { case (escaped, (filter1, filter3)) =>
+      withSQLConf(SQLConf.ESCAPED_STRING_LITERALS.key -> escaped.toString) {
+        val rlike1 = df.filter(filter1)
+        val rlike2 = df.filter($"value".rlike("^\\x20[\\x20-\\x23]+$"))
+        val rlike3 = df.filter(filter3)
+        checkAnswer(rlike1, rlike2)
+        assert(rlike3.count() == 0)
+      }
     }
   }
 
@@ -1942,19 +2036,33 @@ class DatasetSuite extends QueryTest
   test("SPARK-22472: add null check for top-level primitive values") {
     // If the primitive values are from Option, we need to do runtime null check.
     val ds = Seq(Some(1), None).toDS().as[Int]
-    val e1 = intercept[RuntimeException](ds.collect())
-    assert(e1.getCause.isInstanceOf[NullPointerException])
-    val e2 = intercept[SparkException](ds.map(_ * 2).collect())
-    assert(e2.getCause.isInstanceOf[NullPointerException])
+    val errorClass = "EXPRESSION_DECODING_FAILED"
+    val sqlState = "42846"
+    checkError(
+      exception = intercept[SparkRuntimeException](ds.collect()),
+      errorClass = "EXPRESSION_DECODING_FAILED",
+      sqlState = "42846",
+      parameters = Map("expressions" -> "assertnotnull(input[0, int, true])"))
+    checkError(
+      exception = intercept[SparkRuntimeException](ds.map(_ * 2).collect()),
+      errorClass = "NOT_NULL_ASSERT_VIOLATION",
+      sqlState = "42000",
+      parameters = Map("walkedTypePath" -> "\n- root class: \"int\"\n"))
 
     withTempPath { path =>
       Seq(Integer.valueOf(1), null).toDF("i").write.parquet(path.getCanonicalPath)
       // If the primitive values are from files, we need to do runtime null check.
       val ds = spark.read.parquet(path.getCanonicalPath).as[Int]
-      val e1 = intercept[RuntimeException](ds.collect())
-      assert(e1.getCause.isInstanceOf[NullPointerException])
-      val e2 = intercept[SparkException](ds.map(_ * 2).collect())
-      assert(e2.getCause.isInstanceOf[NullPointerException])
+      checkError(
+        exception = intercept[SparkRuntimeException](ds.collect()),
+        errorClass = "EXPRESSION_DECODING_FAILED",
+        sqlState = "42846",
+        parameters = Map("expressions" -> "assertnotnull(input[0, int, true])"))
+      checkError(
+        exception = intercept[SparkRuntimeException](ds.map(_ * 2).collect()),
+        errorClass = "NOT_NULL_ASSERT_VIOLATION",
+        sqlState = "42000",
+        parameters = Map("walkedTypePath" -> "\n- root class: \"int\"\n"))
     }
   }
 
@@ -1972,18 +2080,22 @@ class DatasetSuite extends QueryTest
 
   test("SPARK-23835: null primitive data type should throw NullPointerException") {
     val ds = Seq[(Option[Int], Option[Int])]((Some(1), None)).toDS()
-    val e = intercept[RuntimeException](ds.as[(Int, Int)].collect())
-    assert(e.getCause.isInstanceOf[NullPointerException])
+    checkError(
+      exception = intercept[SparkRuntimeException](ds.as[(Int, Int)].collect()),
+      errorClass = "EXPRESSION_DECODING_FAILED",
+      sqlState = "42846",
+      parameters = Map("expressions" -> "newInstance(class scala.Tuple2)"))
   }
 
   test("SPARK-24569: Option of primitive types are mistakenly mapped to struct type") {
+    import org.apache.spark.util.ArrayImplicits._
     withSQLConf(SQLConf.CROSS_JOINS_ENABLED.key -> "true") {
-      val a = Seq(Some(1)).toDS
-      val b = Seq(Some(1.2)).toDS
-      val expected = Seq((Some(1), Some(1.2))).toDS
+      val a = Seq(Some(1)).toDS()
+      val b = Seq(Some(1.2)).toDS()
+      val expected = Seq((Some(1), Some(1.2))).toDS()
       val joined = a.joinWith(b, lit(true))
       assert(joined.schema == expected.schema)
-      checkDataset(joined, expected.collect: _*)
+      checkDataset(joined, expected.collect().toImmutableArraySeq: _*)
     }
   }
 
@@ -1997,7 +2109,8 @@ class DatasetSuite extends QueryTest
     val ds1 = spark.createDataset(rdd)
     val ds2 = spark.createDataset(rdd)(encoder)
     assert(ds1.schema == ds2.schema)
-    checkDataset(ds1.select("_2._2"), ds2.select("_2._2").collect(): _*)
+    import org.apache.spark.util.ArrayImplicits._
+    checkDataset(ds1.select("_2._2"), ds2.select("_2._2").collect().toImmutableArraySeq: _*)
   }
 
   test("SPARK-23862: Spark ExpressionEncoder should support Java Enum type from Scala") {
@@ -2129,14 +2242,14 @@ class DatasetSuite extends QueryTest
 
   test("SPARK-8288: class with only a companion object constructor") {
     val data = Seq(ScroogeLikeExample(1), ScroogeLikeExample(2))
-    val ds = data.toDS
+    val ds = data.toDS()
     checkDataset(ds, data: _*)
     checkAnswer(ds.select("x"), Seq(Row(1), Row(2)))
   }
 
   test("SPARK-26233: serializer should enforce decimal precision and scale") {
     val s = StructType(Seq(StructField("a", StringType), StructField("b", DecimalType(38, 8))))
-    val encoder = RowEncoder(s)
+    val encoder = ExpressionEncoder(s)
     implicit val uEnc = encoder
     val df = spark.range(2).map(l => Row(l.toString, BigDecimal.valueOf(l + 0.1111)))
     checkAnswer(df.groupBy(col("a")).agg(first(col("b"))),
@@ -2170,10 +2283,10 @@ class DatasetSuite extends QueryTest
 
   test("implicit encoder for LocalDate and Instant") {
     val localDate = java.time.LocalDate.of(2019, 3, 30)
-    assert(spark.range(1).map { _ => localDate }.head === localDate)
+    assert(spark.range(1).map { _ => localDate }.head() === localDate)
 
     val instant = java.time.Instant.parse("2019-03-30T09:54:00Z")
-    assert(spark.range(1).map { _ => instant }.head === instant)
+    assert(spark.range(1).map { _ => instant }.head() === instant)
   }
 
   val dotColumnTestModes = Table(
@@ -2184,7 +2297,7 @@ class DatasetSuite extends QueryTest
 
   test("SPARK-25153: Improve error messages for columns with dots/periods") {
     forAll(dotColumnTestModes) { (caseSensitive, colName) =>
-      val ds = Seq(SpecialCharClass("1", "2")).toDS
+      val ds = Seq(SpecialCharClass("1", "2")).toDS()
       withSQLConf(SQLConf.CASE_SENSITIVE.key -> caseSensitive) {
         val colName = if (caseSensitive == "true") "`Field`.`1`" else "`field`.`1`"
         checkError(
@@ -2200,7 +2313,7 @@ class DatasetSuite extends QueryTest
 
   test("SPARK-39783: Fix error messages for columns with dots/periods") {
     forAll(dotColumnTestModes) { (caseSensitive, colName) =>
-      val ds = Seq(SpecialCharClass("1", "2")).toDS
+      val ds = Seq(SpecialCharClass("1", "2")).toDS()
       withSQLConf(SQLConf.CASE_SENSITIVE.key -> caseSensitive) {
         checkError(
           exception = intercept[AnalysisException] {
@@ -2212,7 +2325,8 @@ class DatasetSuite extends QueryTest
           sqlState = None,
           parameters = Map(
             "objectName" -> s"`${colName.replace(".", "`.`")}`",
-            "proposal" -> "`field.1`, `field 2`"))
+            "proposal" -> "`field.1`, `field 2`"),
+          context = ExpectedContext(fragment = "select", getCurrentClassCallSitePattern))
       }
     }
   }
@@ -2226,7 +2340,8 @@ class DatasetSuite extends QueryTest
       sqlState = None,
       parameters = Map(
         "objectName" -> "`the`.`id`",
-        "proposal" -> "`the.id`"))
+        "proposal" -> "`the.id`"),
+      context = ExpectedContext(fragment = "select", getCurrentClassCallSitePattern))
   }
 
   test("SPARK-39783: backticks in error message for map candidate key with dots") {
@@ -2240,7 +2355,8 @@ class DatasetSuite extends QueryTest
       sqlState = None,
       parameters = Map(
         "objectName" -> "`nonexisting`",
-        "proposal" -> "`map`, `other.column`"))
+        "proposal" -> "`map`, `other.column`"),
+      context = ExpectedContext(fragment = "$", getCurrentClassCallSitePattern))
   }
 
   test("groupBy.as") {
@@ -2295,9 +2411,9 @@ class DatasetSuite extends QueryTest
     assert(df1.sameSemantics(df3) === false)
     assert(df3.sameSemantics(df4) === true)
 
-    assert(df1.semanticHash === df2.semanticHash)
-    assert(df1.semanticHash !== df3.semanticHash)
-    assert(df3.semanticHash === df4.semanticHash)
+    assert(df1.semanticHash() === df2.semanticHash())
+    assert(df1.semanticHash() !== df3.semanticHash())
+    assert(df3.semanticHash() === df4.semanticHash())
   }
 
   test("SPARK-31854: Invoke in MapElementsExec should not propagate null") {
@@ -2371,12 +2487,12 @@ class DatasetSuite extends QueryTest
 
   test("SPARK-34605: implicit encoder for java.time.Duration") {
     val duration = java.time.Duration.ofMinutes(10)
-    assert(spark.range(1).map { _ => duration }.head === duration)
+    assert(spark.range(1).map { _ => duration }.head() === duration)
   }
 
   test("SPARK-34615: implicit encoder for java.time.Period") {
     val period = java.time.Period.ofYears(9999).withMonths(11)
-    assert(spark.range(1).map { _ => period }.head === period)
+    assert(spark.range(1).map { _ => period }.head() === period)
   }
 
   test("SPARK-35652: joinWith on two table generated from same one performing a cartesian join," +
@@ -2475,6 +2591,18 @@ class DatasetSuite extends QueryTest
     assert(result == expected)
   }
 
+  test("SPARK-47385: Tuple encoder with Option inputs") {
+    implicit val enc: Encoder[(SingleData, Option[SingleData])] =
+      Encoders.tuple(Encoders.product[SingleData], Encoders.product[Option[SingleData]])
+
+    val input = Seq(
+      (SingleData(1), Some(SingleData(1))),
+      (SingleData(2), None)
+    )
+    val ds = spark.createDataFrame(input).as[(SingleData, Option[SingleData])]
+    checkDataset(ds, input: _*)
+  }
+
   test("SPARK-43124: Show does not trigger job execution on CommandResults") {
     withSQLConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key -> "") {
       withTable("t1") {
@@ -2488,6 +2616,150 @@ class DatasetSuite extends QueryTest
         }
         withListener(spark.sparkContext, listener) { _ =>
           sql("show tables").show()
+        }
+        assert(jobCounter === 0)
+      }
+    }
+  }
+
+  test("SPARK-44311: UDF on value class taking underlying type (backwards compatability)") {
+    val f = udf((v: Int) => v > 1)
+    val ds = Seq(ValueClassContainer(ValueClass(1)), ValueClassContainer(ValueClass(2))).toDS()
+
+    checkDataset(ds.filter(f(col("v"))), ValueClassContainer(ValueClass(2)))
+  }
+
+  test("SPARK-44311: UDF on value class field in product") {
+    val f = udf((v: ValueClass) => v.i > 1)
+    val ds = Seq(ValueClassContainer(ValueClass(1)), ValueClassContainer(ValueClass(2))).toDS()
+
+    checkDataset(ds.filter(f(col("v"))), ValueClassContainer(ValueClass(2)))
+  }
+
+  test("SPARK-44311: UDF on value class this is stored as a struct") {
+    val f = udf((v: ValueClass) => v.i > 1)
+    val ds = Seq(Tuple1(ValueClass(1)), Tuple1(ValueClass(2))).toDS()
+
+    checkDataset(ds.filter(f(col("_1"))), Tuple1(ValueClass(2)))
+  }
+
+  test("CLASS_UNSUPPORTED_BY_MAP_OBJECTS when creating dataset") {
+    withSQLConf(
+      // Set CODEGEN_FACTORY_MODE to default value to reproduce CLASS_UNSUPPORTED_BY_MAP_OBJECTS
+      SQLConf.CODEGEN_FACTORY_MODE.key -> CodegenObjectFactoryMode.NO_CODEGEN.toString) {
+      // Create our own encoder to cover the default encoder from spark.implicits._
+      implicit val im: ExpressionEncoder[Array[Int]] = ExpressionEncoder(
+        AgnosticEncoders.IterableEncoder(
+          ClassTag(classOf[Array[Int]]), BoxedIntEncoder, false, false))
+
+      val df = spark.createDataset(Seq(Array(1)))
+      val exception = intercept[org.apache.spark.SparkRuntimeException] {
+        df.collect()
+      }
+      val expressions = im.resolveAndBind(df.queryExecution.logical.output,
+        spark.sessionState.analyzer)
+        .createDeserializer().expressions
+
+      // Expression decoding error
+      checkError(
+        exception = exception,
+        errorClass = "EXPRESSION_DECODING_FAILED",
+        parameters = Map(
+          "expressions" -> expressions.map(
+            _.simpleString(SQLConf.get.maxToStringFields)).mkString("\n"))
+      )
+      // class unsupported by map objects
+      checkError(
+        exception = exception.getCause.asInstanceOf[org.apache.spark.SparkRuntimeException],
+        errorClass = "CLASS_UNSUPPORTED_BY_MAP_OBJECTS",
+        parameters = Map("cls" -> classOf[Array[Int]].getName))
+    }
+  }
+
+  test("Some(null) is unsupported when creating dataset") {
+    // Create our own encoder to avoid multiple encoders with different suffixes
+    implicit val enc: ExpressionEncoder[Option[String]] = ExpressionEncoder()
+    val exception = intercept[org.apache.spark.SparkRuntimeException] {
+      spark.createDataset(Seq(Some(""), None, Some(null)))
+    }
+    checkError(
+      exception = exception,
+      errorClass = "EXPRESSION_ENCODING_FAILED",
+      parameters = Map(
+        "expressions" -> enc.serializer.map(
+          _.simpleString(SQLConf.get.maxToStringFields)).mkString("\n"))
+    )
+  }
+
+  test("SPARK-45386: persist with StorageLevel.NONE should give correct count") {
+    val ds = Seq(1, 2).toDS().persist(StorageLevel.NONE)
+    assert(ds.count() == 2)
+  }
+
+  test("SPARK-45592: Coaleasced shuffle read is not compatible with hash partitioning") {
+    withSQLConf(SQLConf.CAN_CHANGE_CACHED_PLAN_OUTPUT_PARTITIONING.key -> "true",
+      SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> "-1",
+      SQLConf.SHUFFLE_PARTITIONS.key -> "20",
+      SQLConf.ADVISORY_PARTITION_SIZE_IN_BYTES.key -> "2000") {
+      val ee = spark.range(0, 1000, 1, 5).map(l => (l, l - 1)).toDF()
+        .persist(org.apache.spark.storage.StorageLevel.MEMORY_AND_DISK)
+      ee.count()
+
+      // `minNbrs1` will start with 20 partitions and without the fix would coalesce to ~10
+      // partitions.
+      val minNbrs1 = ee
+        .groupBy("_2").agg(min(col("_1")).as("min_number"))
+        .select(col("_2") as "_1", col("min_number"))
+        .persist(org.apache.spark.storage.StorageLevel.MEMORY_AND_DISK)
+      minNbrs1.count()
+
+      // shuffle on `ee` will start with 2 partitions, smaller than `minNbrs1`'s partition num,
+      // and `EnsureRequirements` will change its partition num to `minNbrs1`'s partition num.
+      withSQLConf(SQLConf.SHUFFLE_PARTITIONS.key -> "5") {
+        val join = ee.join(minNbrs1, "_1")
+        assert(join.count() == 999)
+      }
+    }
+  }
+
+  test("SPARK-45022: exact DatasetQueryContext call site") {
+    withSQLConf(SQLConf.ANSI_ENABLED.key -> "true") {
+      val df = Seq(1).toDS()
+      var callSitePattern: String = null
+      val exception = intercept[AnalysisException] {
+        callSitePattern = getNextLineCallSitePattern()
+        val c = col("a")
+        df.select(c)
+      }
+      checkError(
+        exception,
+        errorClass = "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        sqlState = "42703",
+        parameters = Map("objectName" -> "`a`", "proposal" -> "`value`"),
+        context = ExpectedContext(fragment = "col", callSitePattern = callSitePattern))
+      assert(exception.context.head.asInstanceOf[DataFrameQueryContext].stackTrace.length == 2)
+    }
+  }
+
+  test("SPARK-46791: Dataset with set field") {
+    val ds = Seq(WithSet(0, HashSet("foo", "bar")), WithSet(1, HashSet("bar", "zoo"))).toDS()
+    checkDataset(ds.map(t => t),
+      WithSet(0, HashSet("foo", "bar")), WithSet(1, HashSet("bar", "zoo")))
+  }
+
+  test("SPARK-47270: isEmpty does not trigger job execution on CommandResults") {
+    withSQLConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key -> "") {
+      withTable("t1") {
+        sql("create table t1(c int) using parquet")
+
+        @volatile var jobCounter = 0
+        val listener = new SparkListener {
+          override def onJobStart(jobStart: SparkListenerJobStart): Unit = {
+            jobCounter += 1
+          }
+        }
+        withListener(spark.sparkContext, listener) { _ =>
+          sql("show tables").isEmpty
         }
         assert(jobCounter === 0)
       }
@@ -2524,6 +2796,9 @@ class DatasetLargeResultCollectingSuite extends QueryTest
   }
 }
 
+case class ValueClass(i: Int) extends AnyVal
+case class ValueClassContainer(v: ValueClass)
+
 case class Bar(a: Int)
 
 object AssertExecutionId {
@@ -2542,6 +2817,8 @@ case class TripleData(id: Int, val1: String, val2: Long)
 case class WithImmutableMap(id: String, map_test: scala.collection.immutable.Map[Long, String])
 case class WithMap(id: String, map_test: scala.collection.Map[Long, String])
 case class WithMapInOption(m: Option[scala.collection.Map[Int, Int]])
+
+case class WithSet(id: Int, values: Set[String])
 
 case class Generic[T](id: T, value: Double)
 
@@ -2564,17 +2841,19 @@ case class ClassNullableData(a: String, b: Integer)
 case class NestedStruct(f: ClassData)
 case class DeepNestedStruct(f: NestedStruct)
 
+case class DataSeqOptSeq(a: Seq[Option[Seq[Int]]])
+
 /**
  * A class used to test serialization using encoders. This class throws exceptions when using
  * Java serialization -- so the only way it can be "serialized" is through our encoders.
  */
 case class NonSerializableCaseClass(value: String) extends Externalizable {
   override def readExternal(in: ObjectInput): Unit = {
-    throw new UnsupportedOperationException
+    throw SparkUnsupportedOperationException()
   }
 
   override def writeExternal(out: ObjectOutput): Unit = {
-    throw new UnsupportedOperationException
+    throw SparkUnsupportedOperationException()
   }
 }
 
@@ -2626,3 +2905,6 @@ case class SpecialCharClass(`field.1`: String, `field 2`: String)
 /** Used to test Java Enums from Scala code */
 case class SaveModeCase(mode: SaveMode)
 case class SaveModeArrayCase(modes: Array[SaveMode])
+
+case class K1(a: Long)
+case class K2(a: Long, b: Long)

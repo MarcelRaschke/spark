@@ -20,7 +20,7 @@ import shutil
 import tempfile
 
 from pyspark.errors import AnalysisException
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, lit
 from pyspark.sql.readwriter import DataFrameWriterV2
 from pyspark.sql.types import StructType, StructField, StringType
 from pyspark.testing.sqlutils import ReusedSQLTestCase
@@ -55,12 +55,9 @@ class ReadwriterTestsMixin:
             )
             self.assertEqual(sorted(df.collect()), sorted(actual.collect()))
 
-            try:
-                self.spark.sql("SET spark.sql.sources.default=org.apache.spark.sql.json")
+            with self.sql_conf({"spark.sql.sources.default": "org.apache.spark.sql.json"}):
                 actual = self.spark.read.load(path=tmpPath)
                 self.assertEqual(sorted(df.collect()), sorted(actual.collect()))
-            finally:
-                self.spark.sql("RESET spark.sql.sources.default")
 
             csvpath = os.path.join(tempfile.mkdtemp(), "data")
             df.write.option("quote", None).format("csv").save(csvpath)
@@ -94,12 +91,9 @@ class ReadwriterTestsMixin:
             )
             self.assertEqual(sorted(df.collect()), sorted(actual.collect()))
 
-            try:
-                self.spark.sql("SET spark.sql.sources.default=org.apache.spark.sql.json")
+            with self.sql_conf({"spark.sql.sources.default": "org.apache.spark.sql.json"}):
                 actual = self.spark.read.load(path=tmpPath)
                 self.assertEqual(sorted(df.collect()), sorted(actual.collect()))
-            finally:
-                self.spark.sql("RESET spark.sql.sources.default")
         finally:
             shutil.rmtree(tmpPath)
 
@@ -181,6 +175,27 @@ class ReadwriterTestsMixin:
             df.write.mode("overwrite").insertInto("test_table", False)
             self.assertEqual(6, self.spark.sql("select * from test_table").count())
 
+    def test_cached_table(self):
+        with self.table("test_cached_table_1"):
+            self.spark.range(10).withColumn(
+                "value_1",
+                lit(1),
+            ).write.saveAsTable("test_cached_table_1")
+
+            with self.table("test_cached_table_2"):
+                self.spark.range(10).withColumnRenamed("id", "index").withColumn(
+                    "value_2", lit(2)
+                ).write.saveAsTable("test_cached_table_2")
+
+                df1 = self.spark.read.table("test_cached_table_1")
+                df2 = self.spark.read.table("test_cached_table_2")
+                df3 = self.spark.read.table("test_cached_table_1")
+
+                join1 = df1.join(df2, on=df1.id == df2.index).select(df2.index, df2.value_2)
+                join2 = df3.join(join1, how="left", on=join1.index == df3.id)
+
+                self.assertEqual(join2.columns, ["id", "value_1", "index", "value_2"])
+
 
 class ReadwriterV2TestsMixin:
     def test_api(self):
@@ -202,7 +217,7 @@ class ReadwriterV2TestsMixin:
 
     def check_partitioning_functions(self, tpe):
         import datetime
-        from pyspark.sql.functions import years, months, days, hours, bucket
+        from pyspark.sql.functions.partitioning import years, months, days, hours, bucket
 
         df = self.spark.createDataFrame(
             [(1, datetime.datetime(2000, 1, 1), "foo")], ("id", "ts", "value")
@@ -226,8 +241,14 @@ class ReadwriterV2TestsMixin:
 
     def test_create_without_provider(self):
         df = self.df
-        with self.assertRaisesRegex(AnalysisException, "Hive support is required"):
+        with self.table("test_table"):
             df.writeTo("test_table").create()
+            self.assertEqual(100, self.spark.sql("select * from test_table").count())
+
+    def test_table_overwrite(self):
+        df = self.df
+        with self.assertRaisesRegex(AnalysisException, "TABLE_OR_VIEW_NOT_FOUND"):
+            df.writeTo("test_table").overwrite(lit(True))
 
 
 class ReadwriterTests(ReadwriterTestsMixin, ReusedSQLTestCase):

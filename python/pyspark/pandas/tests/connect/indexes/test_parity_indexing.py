@@ -16,24 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.indexes.test_indexing import FrameIndexingMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
-class FrameParityIndexingTests(FrameIndexingMixin, PandasOnSparkTestUtils, ReusedConnectTestCase):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip("TODO(SPARK-41876): Implement DataFrame `toLocalIterator`")
-    def test_iterrows(self):
-        super().test_iterrows()
-
-    @unittest.skip("TODO(SPARK-41876): Implement DataFrame `toLocalIterator`")
-    def test_itertuples(self):
-        super().test_itertuples()
+class FrameParityIndexingTests(
+    FrameIndexingMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
+):
+    pass
 
 
 if __name__ == "__main__":

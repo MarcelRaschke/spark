@@ -15,14 +15,12 @@
 # limitations under the License.
 #
 
-from distutils.version import LooseVersion
-
 import numpy as np
 import pandas as pd
 from pandas.api.types import CategoricalDtype
 
 import pyspark.pandas as ps
-from pyspark.testing.pandasutils import ComparisonTestBase, TestUtils
+from pyspark.testing.pandasutils import PandasOnSparkTestCase, TestUtils
 
 
 class CategoricalTestsMixin:
@@ -36,6 +34,10 @@ class CategoricalTestsMixin:
                 ),
             },
         )
+
+    @property
+    def psdf(self):
+        return ps.from_pandas(self.pdf)
 
     @property
     def df_pair(self):
@@ -70,11 +72,8 @@ class CategoricalTestsMixin:
         pser = pdf.a
         psser = psdf.a
 
-        pser.cat.categories = ["z", "y", "x"]
-        psser.cat.categories = ["z", "y", "x"]
-        if LooseVersion(pd.__version__) >= LooseVersion("1.3"):
-            # Bug in pandas 1.3. dtype is not updated properly with `inplace` argument.
-            pser = pser.astype(CategoricalDtype(categories=["x", "y", "z"]))
+        pser = pser.cat.rename_categories(["z", "y", "x"])
+        psser = psser.cat.rename_categories(["z", "y", "x"])
 
         self.assert_eq(pser, psser)
         self.assert_eq(pdf, psdf)
@@ -168,27 +167,8 @@ class CategoricalTestsMixin:
         # as_ordered
         self.assert_eq(pser.cat.as_ordered(), psser.cat.as_ordered())
 
-        pser.cat.as_ordered(inplace=True)
-        psser.cat.as_ordered(inplace=True)
-        if LooseVersion(pd.__version__) >= LooseVersion("1.3"):
-            # Bug in pandas 1.3. dtype is not updated properly with `inplace` argument.
-            pser = pser.astype(CategoricalDtype(categories=[1, 2, 3], ordered=True))
-
-        self.assert_eq(pser, psser)
-        self.assert_eq(pdf, psdf)
-
         # as_unordered
         self.assert_eq(pser.cat.as_unordered(), psser.cat.as_unordered())
-
-        pser.cat.as_unordered(inplace=True)
-        psser.cat.as_unordered(inplace=True)
-        if LooseVersion(pd.__version__) >= LooseVersion("1.3"):
-            # Bug in pandas 1.3. dtype is not updated properly with `inplace` argument.
-            pser = pser.astype(CategoricalDtype(categories=[1, 2, 3], ordered=False))
-            pdf.a = pser
-
-        self.assert_eq(pser, psser)
-        self.assert_eq(pdf, psdf)
 
     def test_astype(self):
         pser = pd.Series(["a", "b", "c"])
@@ -205,17 +185,10 @@ class CategoricalTestsMixin:
 
         self.assert_eq(pscser.astype("category"), pcser.astype("category"))
 
-        # CategoricalDtype is not updated if the dtype is same from pandas 1.3.
-        if LooseVersion(pd.__version__) >= LooseVersion("1.3"):
-            self.assert_eq(
-                pscser.astype(CategoricalDtype(["b", "c", "a"])),
-                pcser.astype(CategoricalDtype(["b", "c", "a"])),
-            )
-        else:
-            self.assert_eq(
-                pscser.astype(CategoricalDtype(["b", "c", "a"])),
-                pcser,
-            )
+        self.assert_eq(
+            pscser.astype(CategoricalDtype(["b", "c", "a"])),
+            pcser.astype(CategoricalDtype(["b", "c", "a"])),
+        )
 
         self.assert_eq(pscser.astype(str), pcser.astype(str))
 
@@ -229,8 +202,8 @@ class CategoricalTestsMixin:
         self.assert_eq(kcodes.tolist(), pcodes.tolist())
         self.assert_eq(kuniques, puniques)
 
-        pcodes, puniques = pser.factorize(na_sentinel=-2)
-        kcodes, kuniques = psser.factorize(na_sentinel=-2)
+        pcodes, puniques = pser.factorize(use_na_sentinel=-2)
+        kcodes, kuniques = psser.factorize(use_na_sentinel=-2)
 
         self.assert_eq(kcodes.tolist(), pcodes.tolist())
         self.assert_eq(kuniques, puniques)
@@ -372,8 +345,8 @@ class CategoricalTestsMixin:
             return df
 
         self.assert_eq(
-            psdf.groupby("a").apply(identity).sort_values(["a", "b"]).reset_index(drop=True),
-            pdf.groupby("a").apply(identity).sort_values(["a", "b"]).reset_index(drop=True),
+            psdf.groupby("a").apply(identity).sort_values(["b"]).reset_index(drop=True),
+            pdf.groupby("a").apply(identity).sort_values(["b"]).reset_index(drop=True),
         )
 
     def test_groupby_transform(self):
@@ -406,28 +379,15 @@ class CategoricalTestsMixin:
         )
 
         dtype = CategoricalDtype(categories=["a", "b", "c", "d"])
-
-        # The behavior for CategoricalDtype is changed from pandas 1.3
-        if LooseVersion(pd.__version__) >= LooseVersion("1.3"):
-            ret_dtype = pdf.b.dtype
-        else:
-            ret_dtype = dtype
+        ret_dtype = pdf.b.dtype
 
         def astype(x) -> ps.Series[ret_dtype]:
             return x.astype(dtype)
 
-        if LooseVersion(pd.__version__) >= LooseVersion("1.2"):
-            self.assert_eq(
-                psdf.groupby("a").transform(astype).sort_values("b").reset_index(drop=True),
-                pdf.groupby("a").transform(astype).sort_values("b").reset_index(drop=True),
-            )
-        else:
-            expected = pdf.groupby("a").transform(astype)
-            expected["b"] = dtype.categories.take(expected["b"].cat.codes).astype(dtype)
-            self.assert_eq(
-                psdf.groupby("a").transform(astype).sort_values("b").reset_index(drop=True),
-                expected.sort_values("b").reset_index(drop=True),
-            )
+        self.assert_eq(
+            psdf.groupby("a").transform(astype).sort_values("b").reset_index(drop=True),
+            pdf.groupby("a").transform(astype).sort_values("b").reset_index(drop=True),
+        )
 
     def test_frame_apply_batch(self):
         pdf, psdf = self.df_pair
@@ -702,7 +662,11 @@ class CategoricalTestsMixin:
         )
 
 
-class CategoricalTests(CategoricalTestsMixin, ComparisonTestBase, TestUtils):
+class CategoricalTests(
+    CategoricalTestsMixin,
+    PandasOnSparkTestCase,
+    TestUtils,
+):
     pass
 
 

@@ -29,7 +29,9 @@ import io.grpc.stub.StreamObserver
 import org.apache.spark.connect.proto
 import org.apache.spark.connect.proto.{AddArtifactsRequest, AddArtifactsResponse}
 import org.apache.spark.connect.proto.AddArtifactsResponse.ArtifactSummary
-import org.apache.spark.sql.connect.artifact.SparkConnectArtifactManager
+import org.apache.spark.sql.artifact.ArtifactManager
+import org.apache.spark.sql.artifact.util.ArtifactUtils
+import org.apache.spark.sql.connect.utils.ErrorUtils
 import org.apache.spark.util.Utils
 
 /**
@@ -48,14 +50,17 @@ class SparkConnectAddArtifactsHandler(val responseObserver: StreamObserver[AddAr
   // several [[AddArtifactsRequest]]s.
   private var chunkedArtifact: StagedChunkedArtifact = _
   private var holder: SessionHolder = _
-  private def artifactManager: SparkConnectArtifactManager =
-    SparkConnectArtifactManager.getOrCreateArtifactManager
 
-  override def onNext(req: AddArtifactsRequest): Unit = {
+  override def onNext(req: AddArtifactsRequest): Unit = try {
     if (this.holder == null) {
+      val previousSessionId = req.hasClientObservedServerSideSessionId match {
+        case true => Some(req.getClientObservedServerSideSessionId)
+        case false => None
+      }
       this.holder = SparkConnectService.getOrCreateIsolatedSession(
         req.getUserContext.getUserId,
-        req.getSessionId)
+        req.getSessionId,
+        previousSessionId)
     }
 
     if (req.hasBeginChunk) {
@@ -78,15 +83,27 @@ class SparkConnectAddArtifactsHandler(val responseObserver: StreamObserver[AddAr
     } else {
       throw new UnsupportedOperationException(s"Unsupported data transfer request: $req")
     }
+  } catch {
+    ErrorUtils.handleError(
+      "addArtifacts.onNext",
+      responseObserver,
+      holder.userId,
+      holder.sessionId,
+      None,
+      false,
+      Some(() => {
+        cleanUpStagedArtifacts()
+      }))
   }
 
   override def onError(throwable: Throwable): Unit = {
-    Utils.deleteRecursively(stagingDir.toFile)
+    cleanUpStagedArtifacts()
     responseObserver.onError(throwable)
   }
 
   protected def addStagedArtifactToArtifactManager(artifact: StagedArtifact): Unit = {
-    artifactManager.addArtifact(holder, artifact.path, artifact.stagedPath, artifact.fragment)
+    require(holder != null)
+    holder.addArtifact(artifact.path, artifact.stagedPath, artifact.fragment)
   }
 
   /**
@@ -100,7 +117,11 @@ class SparkConnectAddArtifactsHandler(val responseObserver: StreamObserver[AddAr
       // We do not store artifacts that fail the CRC. The failure is reported in the artifact
       // summary and it is up to the client to decide whether to retry sending the artifact.
       if (artifact.getCrcStatus.contains(true)) {
-        addStagedArtifactToArtifactManager(artifact)
+        if (artifact.path.startsWith(ArtifactManager.forwardToFSPrefix + File.separator)) {
+          holder.artifactManager.uploadArtifactToFs(artifact.path, artifact.stagedPath)
+        } else {
+          addStagedArtifactToArtifactManager(artifact)
+        }
       }
       artifact.summary()
     }.toSeq
@@ -109,16 +130,31 @@ class SparkConnectAddArtifactsHandler(val responseObserver: StreamObserver[AddAr
   protected def cleanUpStagedArtifacts(): Unit = Utils.deleteRecursively(stagingDir.toFile)
 
   override def onCompleted(): Unit = {
-    val artifactSummaries = flushStagedArtifacts()
-    // Add the artifacts to the session and return the summaries to the client.
-    val builder = proto.AddArtifactsResponse.newBuilder()
-    artifactSummaries.foreach(summary => builder.addArtifacts(summary))
-    // Delete temp dir
-    cleanUpStagedArtifacts()
+    try {
+      val artifactSummaries = flushStagedArtifacts()
+      // Add the artifacts to the session and return the summaries to the client.
+      val builder = proto.AddArtifactsResponse.newBuilder()
+      builder.setSessionId(holder.sessionId)
+      builder.setServerSideSessionId(holder.serverSessionId)
+      artifactSummaries.foreach(summary => builder.addArtifacts(summary))
+      // Delete temp dir
+      cleanUpStagedArtifacts()
 
-    // Send the summaries and close
-    responseObserver.onNext(builder.build())
-    responseObserver.onCompleted()
+      // Send the summaries and close
+      responseObserver.onNext(builder.build())
+      responseObserver.onCompleted()
+    } catch {
+      ErrorUtils.handleError(
+        "addArtifacts.onComplete",
+        responseObserver,
+        holder.userId,
+        holder.sessionId,
+        None,
+        false,
+        Some(() => {
+          cleanUpStagedArtifacts()
+        }))
+    }
   }
 
   /**
@@ -164,7 +200,16 @@ class SparkConnectAddArtifactsHandler(val responseObserver: StreamObserver[AddAr
       }
 
     val path: Path = Paths.get(canonicalFileName)
-    val stagedPath: Path = stagingDir.resolve(path)
+    val stagedPath: Path =
+      try {
+        ArtifactUtils.concatenatePaths(stagingDir, path)
+      } catch {
+        case _: IllegalArgumentException =>
+          throw new IllegalArgumentException(
+            s"Artifact with name: $name is invalid. The `name` " +
+              s"must be a relative path and cannot reference parent/sibling/nephew directories.")
+        case NonFatal(e) => throw e
+      }
 
     Files.createDirectories(stagedPath.getParent)
 

@@ -15,49 +15,12 @@
 # limitations under the License.
 #
 
-import unittest
-
-from pyspark.sql.connect.types import UnparsedDataType
-from pyspark.sql.functions import pandas_udf, PandasUDFType
 from pyspark.sql.tests.pandas.test_pandas_udf import PandasUDFTestsMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 
 
 class PandasUDFParityTests(PandasUDFTestsMixin, ReusedConnectTestCase):
-    def test_udf_wrong_arg(self):
-        self.check_udf_wrong_arg()
-
-    def test_pandas_udf_decorator_with_return_type_string(self):
-        @pandas_udf("v double", PandasUDFType.GROUPED_MAP)
-        def foo(x):
-            return x
-
-        self.assertEqual(foo.returnType, UnparsedDataType("v double"))
-        self.assertEqual(foo.evalType, PandasUDFType.GROUPED_MAP)
-
-        @pandas_udf(returnType="double", functionType=PandasUDFType.SCALAR)
-        def foo(x):
-            return x
-
-        self.assertEqual(foo.returnType, UnparsedDataType("double"))
-        self.assertEqual(foo.evalType, PandasUDFType.SCALAR)
-
-    def test_pandas_udf_basic_with_return_type_string(self):
-        udf = pandas_udf(lambda x: x, "double", PandasUDFType.SCALAR)
-        self.assertEqual(udf.returnType, UnparsedDataType("double"))
-        self.assertEqual(udf.evalType, PandasUDFType.SCALAR)
-
-        udf = pandas_udf(lambda x: x, "v double", PandasUDFType.GROUPED_MAP)
-        self.assertEqual(udf.returnType, UnparsedDataType("v double"))
-        self.assertEqual(udf.evalType, PandasUDFType.GROUPED_MAP)
-
-        udf = pandas_udf(lambda x: x, "v double", functionType=PandasUDFType.GROUPED_MAP)
-        self.assertEqual(udf.returnType, UnparsedDataType("v double"))
-        self.assertEqual(udf.evalType, PandasUDFType.GROUPED_MAP)
-
-        udf = pandas_udf(lambda x: x, returnType="v double", functionType=PandasUDFType.GROUPED_MAP)
-        self.assertEqual(udf.returnType, UnparsedDataType("v double"))
-        self.assertEqual(udf.evalType, PandasUDFType.GROUPED_MAP)
+    pass
 
 
 if __name__ == "__main__":

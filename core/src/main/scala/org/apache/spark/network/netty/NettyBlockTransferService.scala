@@ -21,8 +21,8 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.{HashMap => JHashMap, Map => JMap}
 
-import scala.collection.JavaConverters._
 import scala.concurrent.{Future, Promise}
+import scala.jdk.CollectionConverters._
 import scala.reflect.ClassTag
 import scala.util.{Success, Try}
 
@@ -30,7 +30,7 @@ import com.codahale.metrics.{Metric, MetricSet}
 
 import org.apache.spark.{SecurityManager, SparkConf}
 import org.apache.spark.ExecutorDeadException
-import org.apache.spark.internal.config
+import org.apache.spark.internal.{config, LogKeys, MDC}
 import org.apache.spark.network._
 import org.apache.spark.network.buffer.{ManagedBuffer, NioManagedBuffer}
 import org.apache.spark.network.client.{RpcResponseCallback, TransportClientBootstrap}
@@ -70,7 +70,11 @@ private[spark] class NettyBlockTransferService(
     val rpcHandler = new NettyBlockRpcServer(conf.getAppId, serializer, blockDataManager)
     var serverBootstrap: Option[TransportServerBootstrap] = None
     var clientBootstrap: Option[TransportClientBootstrap] = None
-    this.transportConf = SparkTransportConf.fromSparkConf(conf, "shuffle", numCores)
+    this.transportConf = SparkTransportConf.fromSparkConf(
+      conf,
+      "shuffle",
+      numCores,
+      sslOptions = Some(securityManager.getRpcSSLOptions()))
     if (authEnabled) {
       serverBootstrap = Some(new AuthServerBootstrap(transportConf, securityManager))
       clientBootstrap = Some(new AuthClientBootstrap(transportConf, conf.getAppId, securityManager))
@@ -81,9 +85,11 @@ private[spark] class NettyBlockTransferService(
     appId = conf.getAppId
 
     if (hostName.equals(bindAddress)) {
-      logger.info(s"Server created on $hostName:${server.getPort}")
+      logger.info("Server created on {}:{}",
+        MDC(LogKeys.HOST, hostName), MDC(LogKeys.PORT, server.getPort))
     } else {
-      logger.info(s"Server created on $hostName $bindAddress:${server.getPort}")
+      logger.info("Server created on {} {}:{}", MDC(LogKeys.HOST, hostName),
+        MDC(LogKeys.BIND_ADDRESS, bindAddress), MDC(LogKeys.PORT, server.getPort))
     }
   }
 
@@ -189,7 +195,11 @@ private[spark] class NettyBlockTransferService(
       }
 
       override def onFailure(e: Throwable): Unit = {
-        logger.error(s"Error while uploading $blockId${if (asStream) " as stream" else ""}", e)
+        if (asStream) {
+          logger.error(s"Error while uploading {} as stream", e, MDC.of(LogKeys.BLOCK_ID, blockId))
+        } else {
+          logger.error(s"Error while uploading {}", e, MDC.of(LogKeys.BLOCK_ID, blockId))
+        }
         result.failure(e)
       }
     }

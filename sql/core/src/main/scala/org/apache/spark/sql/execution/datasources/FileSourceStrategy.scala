@@ -21,15 +21,19 @@ import java.util.Locale
 
 import scala.collection.mutable
 
-import org.apache.spark.internal.Logging
+import org.apache.spark.internal.{Logging, MDC}
+import org.apache.spark.internal.LogKeys.{NUM_PRUNED, POST_SCAN_FILTERS, PUSHED_FILTERS, TOTAL}
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.expressions
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.planning.ScanOperation
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+import org.apache.spark.sql.catalyst.trees.TreePattern.{PLAN_EXPRESSION, SCALAR_SUBQUERY}
+import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.{FileSourceScanExec, SparkPlan}
 import org.apache.spark.sql.types.{DoubleType, FloatType, StructType}
+import org.apache.spark.util.ArrayImplicits._
 import org.apache.spark.util.collection.BitSet
 
 /**
@@ -134,9 +138,8 @@ object FileSourceStrategy extends Strategy with PredicateHelper with Logging {
 
     val numBucketsSelected = matchedBuckets.cardinality()
 
-    logInfo {
-      s"Pruned ${numBuckets - numBucketsSelected} out of $numBuckets buckets."
-    }
+    logInfo(log"Pruned ${MDC(NUM_PRUNED, numBuckets - numBucketsSelected)} " +
+      log"out of ${MDC(TOTAL, numBuckets)} buckets.")
 
     // None means all the buckets need to be scanned
     if (numBucketsSelected == numBuckets) {
@@ -157,8 +160,11 @@ object FileSourceStrategy extends Strategy with PredicateHelper with Logging {
       //  - filters that need to be evaluated again after the scan
       val filterSet = ExpressionSet(filters)
 
+      val filtersToPush = filters.filter(f =>
+          DataSourceUtils.shouldPushFilter(f, fsRelation.fileFormat.supportsCollationPushDown))
+
       val normalizedFilters = DataSourceStrategy.normalizeExprs(
-        filters.filter(_.deterministic), l.output)
+        filtersToPush, l.output)
 
       val partitionColumns =
         l.resolve(
@@ -170,14 +176,9 @@ object FileSourceStrategy extends Strategy with PredicateHelper with Logging {
       val partitionKeyFilters = DataSourceStrategy.getPushedDownFilters(partitionColumns,
         normalizedFilters)
 
-      // subquery expressions are filtered out because they can't be used to prune buckets or pushed
-      // down as data filters, yet they would be executed
-      val normalizedFiltersWithoutSubqueries =
-        normalizedFilters.filterNot(SubqueryExpression.hasSubquery)
-
       val bucketSpec: Option[BucketSpec] = fsRelation.bucketSpec
       val bucketSet = if (shouldPruneBuckets(bucketSpec)) {
-        genBucketSet(normalizedFiltersWithoutSubqueries, bucketSpec.get)
+        genBucketSet(normalizedFilters, bucketSpec.get)
       } else {
         None
       }
@@ -188,7 +189,13 @@ object FileSourceStrategy extends Strategy with PredicateHelper with Logging {
       // Partition keys are not available in the statistics of the files.
       // `dataColumns` might have partition columns, we need to filter them out.
       val dataColumnsWithoutPartitionCols = dataColumns.filterNot(partitionSet.contains)
-      val dataFilters = normalizedFiltersWithoutSubqueries.flatMap { f =>
+      // Scalar subquery can be pushed down as data filter at runtime, since we always
+      // execute subquery first.
+      // It has no meaning to push down bloom filter, so skip it.
+      val normalizedFiltersWithScalarSubqueries = normalizedFilters
+        .filterNot(e => e.containsPattern(PLAN_EXPRESSION) && !e.containsPattern(SCALAR_SUBQUERY))
+        .filterNot(_.isInstanceOf[BloomFilterMightContain])
+      val dataFilters = normalizedFiltersWithScalarSubqueries.flatMap { f =>
         if (f.references.intersect(partitionSet).nonEmpty) {
           extractPredicatesWithinOutputSet(f, AttributeSet(dataColumnsWithoutPartitionCols))
         } else {
@@ -199,19 +206,18 @@ object FileSourceStrategy extends Strategy with PredicateHelper with Logging {
         DataSourceUtils.supportNestedPredicatePushdown(fsRelation)
       val pushedFilters = dataFilters
         .flatMap(DataSourceStrategy.translateFilter(_, supportNestedPredicatePushdown))
-      logInfo(s"Pushed Filters: ${pushedFilters.mkString(",")}")
+      logInfo(log"Pushed Filters: ${MDC(PUSHED_FILTERS, pushedFilters.mkString(","))}")
 
       // Predicates with both partition keys and attributes need to be evaluated after the scan.
       val afterScanFilters = filterSet -- partitionKeyFilters.filter(_.references.nonEmpty)
-      logInfo(s"Post-Scan Filters: ${afterScanFilters.mkString(",")}")
+      logInfo(log"Post-Scan Filters: ${MDC(POST_SCAN_FILTERS, afterScanFilters.mkString(","))}")
 
       val filterAttributes = AttributeSet(afterScanFilters ++ stayUpFilters)
       val requiredExpressions: Seq[NamedExpression] = filterAttributes.toSeq ++ projects
       val requiredAttributes = AttributeSet(requiredExpressions)
 
-      val readDataColumns = dataColumns
+      val readDataColumns = dataColumnsWithoutPartitionCols
         .filter(requiredAttributes.contains)
-        .filterNot(partitionColumns.contains)
 
       // Metadata attributes are part of a column of type struct up to this point. Here we extract
       // this column from the schema and specify a matcher for that.
@@ -255,24 +261,29 @@ object FileSourceStrategy extends Strategy with PredicateHelper with Logging {
         metadataStruct.dataType.asInstanceOf[StructType].fields.foreach {
           case FileSourceGeneratedMetadataStructField(field, internalName) =>
             if (schemaColumns.contains(internalName)) {
-              throw new AnalysisException(internalName +
-                s"${internalName} is a reserved column name that cannot be read in combination " +
-                s"with ${FileFormat.METADATA_NAME}.${field.name} column.")
+              throw new AnalysisException(
+                errorClass = "_LEGACY_ERROR_TEMP_3069",
+                messageParameters = Map(
+                  "internalName" -> internalName,
+                  "colName" -> s"${FileFormat.METADATA_NAME}.${field.name}"
+                ))
             }
 
             // NOTE: Readers require the internal column to be nullable because it's not part of the
             // file's public schema. The projection below will restore the correct nullability for
             // the column while constructing the final metadata struct.
-            val attr = field.copy(internalName, nullable = true).toAttribute
+            val attr = DataTypeUtils.toAttribute(field.copy(internalName, nullable = true))
             metadataColumnsByName.put(field.name, attr)
             generatedMetadataColumns += attr
 
           case FileSourceConstantMetadataStructField(field) =>
-            val attr = field.toAttribute
+            val attr = DataTypeUtils.toAttribute(field)
             metadataColumnsByName.put(field.name, attr)
             constantMetadataColumns += attr
 
-          case field => throw new AnalysisException(s"Unrecognized file metadata field: $field")
+          case field => throw new AnalysisException(
+            errorClass = "_LEGACY_ERROR_TEMP_3070",
+            messageParameters = Map("field" -> field.toString))
         }
       }
 
@@ -332,7 +343,7 @@ object FileSourceStrategy extends Strategy with PredicateHelper with Logging {
         // Here, we *explicitly* enforce the not null to `CreateStruct(structColumns)`
         // to avoid any risk of inconsistent schema nullability
         val metadataAlias =
-          Alias(KnownNotNull(CreateStruct(structColumns)),
+          Alias(KnownNotNull(CreateStruct(structColumns.toImmutableArraySeq)),
             FileFormat.METADATA_NAME)(exprId = metadataStruct.exprId)
         execution.ProjectExec(
           readDataColumns ++ partitionColumns :+ metadataAlias, scan)

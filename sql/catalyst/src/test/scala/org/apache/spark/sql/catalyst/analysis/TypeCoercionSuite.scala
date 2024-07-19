@@ -31,6 +31,7 @@ import org.apache.spark.sql.catalyst.rules.{Rule, RuleExecutor}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
+import org.apache.spark.unsafe.types.CalendarInterval
 import org.apache.spark.util.Utils
 
 abstract class TypeCoercionSuiteBase extends AnalysisTest {
@@ -781,7 +782,7 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
     widenTestWithStringPromotion(
       ArrayType(DecimalType(36, 0), containsNull = false),
       ArrayType(DecimalType(36, 35), containsNull = false),
-      Some(ArrayType(DecimalType(38, 35), containsNull = true)))
+      Some(ArrayType(DecimalType(38, 2), containsNull = false)))
 
     // MapType
     widenTestWithStringPromotion(
@@ -807,7 +808,7 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
     widenTestWithStringPromotion(
       MapType(StringType, DecimalType(36, 0), valueContainsNull = false),
       MapType(StringType, DecimalType(36, 35), valueContainsNull = false),
-      Some(MapType(StringType, DecimalType(38, 35), valueContainsNull = true)))
+      Some(MapType(StringType, DecimalType(38, 2), valueContainsNull = false)))
     widenTestWithStringPromotion(
       MapType(IntegerType, StringType, valueContainsNull = false),
       MapType(DecimalType.IntDecimal, StringType, valueContainsNull = false),
@@ -815,7 +816,7 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
     widenTestWithStringPromotion(
       MapType(DecimalType(36, 0), StringType, valueContainsNull = false),
       MapType(DecimalType(36, 35), StringType, valueContainsNull = false),
-      None)
+      Some(MapType(DecimalType(38, 2), StringType, valueContainsNull = false)))
 
     // StructType
     widenTestWithStringPromotion(
@@ -846,7 +847,7 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
     widenTestWithStringPromotion(
       new StructType().add("num", DecimalType(36, 0), nullable = false),
       new StructType().add("num", DecimalType(36, 35), nullable = false),
-      Some(new StructType().add("num", DecimalType(38, 35), nullable = true)))
+      Some(new StructType().add("num", DecimalType(38, 2), nullable = false)))
 
     widenTestWithStringPromotion(
       new StructType().add("num", IntegerType),
@@ -1045,9 +1046,9 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
         :: Literal.create(null, DecimalType(22, 10))
         :: Literal.create(null, DecimalType(38, 38))
         :: Nil),
-      CreateArray(Literal.create(null, DecimalType(5, 3)).cast(DecimalType(38, 38))
-        :: Literal.create(null, DecimalType(22, 10)).cast(DecimalType(38, 38))
-        :: Literal.create(null, DecimalType(38, 38))
+      CreateArray(Literal.create(null, DecimalType(5, 3)).cast(DecimalType(38, 26))
+        :: Literal.create(null, DecimalType(22, 10)).cast(DecimalType(38, 26))
+        :: Literal.create(null, DecimalType(38, 38)).cast(DecimalType(38, 26))
         :: Nil))
   }
 
@@ -1094,9 +1095,9 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
         :: Literal.create(null, DecimalType(38, 38))
         :: Nil),
       CreateMap(Literal(1)
-        :: Literal.create(null, DecimalType(38, 0)).cast(DecimalType(38, 38))
+        :: Literal.create(null, DecimalType(38, 0))
         :: Literal(2)
-        :: Literal.create(null, DecimalType(38, 38))
+        :: Literal.create(null, DecimalType(38, 38)).cast(DecimalType(38, 0))
         :: Nil))
     // type coercion for both map keys and values
     ruleTest(TypeCoercion.FunctionArgumentConversion,
@@ -1579,6 +1580,22 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
     ruleTest(rules, Divide(nullLit, 1L), Divide(Cast(nullLit, DoubleType), Cast(1L, DoubleType)))
   }
 
+  test("Do not promote strings in binary arithmetic with intervals") {
+    val rule = TypeCoercion.PromoteStrings
+    // Verify String literal is not promoted in binary arithmetic operations with
+    // CalendarIntervalType, DayTimeIntervalType and YearMonthIntervalType
+    Seq(
+      Literal(Duration.ofHours(1)),
+      Literal(Period.ofDays(1)),
+      Literal(new CalendarInterval(1, 1, 1))).foreach { interval =>
+      val l = Literal("a")
+      Seq(Add(l, interval), Subtract(l, interval), Multiply(l, interval), Divide(l, interval))
+        .foreach { expr =>
+          ruleTest(rule, expr, expr)
+        }
+    }
+  }
+
   test("binary comparison with string promotion") {
     val rule = TypeCoercion.PromoteStrings
     ruleTest(rule,
@@ -1594,6 +1611,9 @@ class TypeCoercionSuite extends TypeCoercionSuiteBase {
       GreaterThan(Literal("1.5"), Literal(BigDecimal("0.5"))),
       GreaterThan(Cast(Literal("1.5"), DoubleType), Cast(Literal(BigDecimal("0.5")),
         DoubleType)))
+    ruleTest(rule,
+      GreaterThan(Literal("1.0"), Literal(BigDecimal("1"))),
+      GreaterThan(Cast(Literal("1.0"), DecimalType(1, 0)), Literal(BigDecimal("1"))))
     // Checks that dates/timestamps are not promoted to strings
     val date0301 = Literal(java.sql.Date.valueOf("2017-03-01"))
     val timestamp0301000000 = Literal(Timestamp.valueOf("2017-03-01 00:00:00"))

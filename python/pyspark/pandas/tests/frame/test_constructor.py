@@ -15,7 +15,6 @@
 # limitations under the License.
 #
 from datetime import datetime, timedelta
-from distutils.version import LooseVersion
 import unittest
 
 import numpy as np
@@ -23,14 +22,13 @@ import pandas as pd
 
 from pyspark import pandas as ps
 from pyspark.pandas.typedef.typehints import (
-    extension_dtypes,
     extension_dtypes_available,
     extension_float_dtypes_available,
     extension_object_dtypes_available,
 )
 from pyspark.pandas.utils import is_testing
 
-from pyspark.testing.pandasutils import ComparisonTestBase
+from pyspark.testing.pandasutils import PandasOnSparkTestCase
 from pyspark.testing.sqlutils import SQLTestUtils
 
 
@@ -139,13 +137,14 @@ class FrameConstructorMixin:
             pd.DataFrame(data=data, index=pd.Index([1, 2, 3, 5, 6])),
         )
 
-        err_msg = "Cannot combine the series or dataframe"
-        with self.assertRaisesRegex(ValueError, err_msg):
-            # test ps.DataFrame with ps.Index
-            ps.DataFrame(data=ps.DataFrame([1, 2]), index=ps.Index([1, 2]))
-        with self.assertRaisesRegex(ValueError, err_msg):
-            # test ps.DataFrame with pd.Index
-            ps.DataFrame(data=ps.DataFrame([1, 2]), index=pd.Index([3, 4]))
+        with ps.option_context("compute.ops_on_diff_frames", False):
+            err_msg = "Cannot combine the series or dataframe"
+            with self.assertRaisesRegex(ValueError, err_msg):
+                # test ps.DataFrame with ps.Index
+                ps.DataFrame(data=ps.DataFrame([1, 2]), index=ps.Index([1, 2]))
+            with self.assertRaisesRegex(ValueError, err_msg):
+                # test ps.DataFrame with pd.Index
+                ps.DataFrame(data=ps.DataFrame([1, 2]), index=pd.Index([3, 4]))
 
         with ps.option_context("compute.ops_on_diff_frames", True):
             # test pd.DataFrame with pd.Index
@@ -197,14 +196,14 @@ class FrameConstructorMixin:
         with ps.option_context("compute.ops_on_diff_frames", True):
             # test with ps.DataFrame and pd.Index
             self.assert_eq(
-                ps.DataFrame(data=psdf, index=pd.Index([2, 3, 4, 5, 6])),
-                pd.DataFrame(data=pdf, index=pd.Index([2, 3, 4, 5, 6])),
+                ps.DataFrame(data=psdf, index=pd.Index([2, 3, 4, 5, 6])).sort_index(),
+                pd.DataFrame(data=pdf, index=pd.Index([2, 3, 4, 5, 6])).sort_index(),
             )
 
             # test with ps.DataFrame and ps.Index
             self.assert_eq(
-                ps.DataFrame(data=psdf, index=ps.Index([2, 3, 4, 5, 6])),
-                pd.DataFrame(data=pdf, index=pd.Index([2, 3, 4, 5, 6])),
+                ps.DataFrame(data=psdf, index=ps.Index([2, 3, 4, 5, 6])).sort_index(),
+                pd.DataFrame(data=pdf, index=pd.Index([2, 3, 4, 5, 6])).sort_index(),
             )
 
         # test String Index
@@ -271,11 +270,11 @@ class FrameConstructorMixin:
             ps.DataFrame(
                 data=pdf,
                 index=pd.DatetimeIndex(["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]),
-            ),
+            ).sort_index(),
             pd.DataFrame(
                 data=pdf,
                 index=pd.DatetimeIndex(["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]),
-            ),
+            ).sort_index(),
         )
 
         # test with pd.DataFrame and ps.DatetimeIndex
@@ -283,11 +282,11 @@ class FrameConstructorMixin:
             ps.DataFrame(
                 data=pdf,
                 index=ps.DatetimeIndex(["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]),
-            ),
+            ).sort_index(),
             pd.DataFrame(
                 data=pdf,
                 index=pd.DatetimeIndex(["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]),
-            ),
+            ).sort_index(),
         )
 
         with ps.option_context("compute.ops_on_diff_frames", True):
@@ -298,13 +297,13 @@ class FrameConstructorMixin:
                     index=pd.DatetimeIndex(
                         ["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]
                     ),
-                ),
+                ).sort_index(),
                 pd.DataFrame(
                     data=pdf,
                     index=pd.DatetimeIndex(
                         ["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]
                     ),
-                ),
+                ).sort_index(),
             )
 
             # test with ps.DataFrame and ps.DatetimeIndex
@@ -314,13 +313,13 @@ class FrameConstructorMixin:
                     index=ps.DatetimeIndex(
                         ["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]
                     ),
-                ),
+                ).sort_index(),
                 pd.DataFrame(
                     data=pdf,
                     index=pd.DatetimeIndex(
                         ["2022-08-31", "2022-09-02", "2022-09-03", "2022-09-05"]
                     ),
-                ),
+                ).sort_index(),
             )
 
         # test MultiIndex
@@ -490,14 +489,6 @@ class FrameConstructorMixin:
             # test ps.DataFrame with pd.MultiIndex
             ps.DataFrame(data=psdf, index=pdf.index)
 
-    def _check_extension(self, psdf, pdf):
-        if LooseVersion("1.1") <= LooseVersion(pd.__version__) < LooseVersion("1.2.2"):
-            self.assert_eq(psdf, pdf, check_exact=False)
-            for dtype in psdf.dtypes:
-                self.assertTrue(isinstance(dtype, extension_dtypes))
-        else:
-            self.assert_eq(psdf, pdf)
-
     @unittest.skipIf(not extension_dtypes_available, "pandas extension dtypes are not available")
     def test_extension_dtypes(self):
         pdf = pd.DataFrame(
@@ -510,8 +501,8 @@ class FrameConstructorMixin:
         )
         psdf = ps.from_pandas(pdf)
 
-        self._check_extension(psdf, pdf)
-        self._check_extension(psdf + psdf, pdf + pdf)
+        self.assert_eq(psdf, pdf)
+        self.assert_eq(psdf + psdf, pdf + pdf)
 
     @unittest.skipIf(not extension_dtypes_available, "pandas extension dtypes are not available")
     def test_astype_extension_dtypes(self):
@@ -527,7 +518,7 @@ class FrameConstructorMixin:
 
         astype = {"a": "Int8", "b": "Int16", "c": "Int32", "d": "Int64"}
 
-        self._check_extension(psdf.astype(astype), pdf.astype(astype))
+        self.assert_eq(psdf.astype(astype), pdf.astype(astype))
 
     @unittest.skipIf(
         not extension_object_dtypes_available, "pandas extension object dtypes are not available"
@@ -541,7 +532,7 @@ class FrameConstructorMixin:
         )
         psdf = ps.from_pandas(pdf)
 
-        self._check_extension(psdf, pdf)
+        self.assert_eq(psdf, pdf)
 
     @unittest.skipIf(
         not extension_object_dtypes_available, "pandas extension object dtypes are not available"
@@ -552,7 +543,7 @@ class FrameConstructorMixin:
 
         astype = {"a": "string", "b": "boolean"}
 
-        self._check_extension(psdf.astype(astype), pdf.astype(astype))
+        self.assert_eq(psdf.astype(astype), pdf.astype(astype))
 
     @unittest.skipIf(
         not extension_float_dtypes_available, "pandas extension float dtypes are not available"
@@ -566,9 +557,9 @@ class FrameConstructorMixin:
         )
         psdf = ps.from_pandas(pdf)
 
-        self._check_extension(psdf, pdf)
-        self._check_extension(psdf + 1, pdf + 1)
-        self._check_extension(psdf + psdf, pdf + pdf)
+        self.assert_eq(psdf, pdf)
+        self.assert_eq(psdf + 1, pdf + 1)
+        self.assert_eq(psdf + psdf, pdf + pdf)
 
     @unittest.skipIf(
         not extension_float_dtypes_available, "pandas extension float dtypes are not available"
@@ -579,10 +570,14 @@ class FrameConstructorMixin:
 
         astype = {"a": "Float32", "b": "Float64"}
 
-        self._check_extension(psdf.astype(astype), pdf.astype(astype))
+        self.assert_eq(psdf.astype(astype), pdf.astype(astype))
 
 
-class FrameConstructorTests(FrameConstructorMixin, ComparisonTestBase, SQLTestUtils):
+class FrameConstructorTests(
+    FrameConstructorMixin,
+    PandasOnSparkTestCase,
+    SQLTestUtils,
+):
     pass
 
 

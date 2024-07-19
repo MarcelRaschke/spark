@@ -2,7 +2,7 @@
 -- !query
 CREATE TEMPORARY VIEW t AS SELECT 'aa' as a
 -- !query analysis
-CreateViewCommand `t`, SELECT 'aa' as a, false, false, LocalTempView, true
+CreateViewCommand `t`, SELECT 'aa' as a, false, false, LocalTempView, UNSUPPORTED, true
    +- Project [aa AS a#x]
       +- OneRowRelation
 
@@ -131,7 +131,7 @@ Project [cast(a#x as binary) AS a#x]
 -- !query
 select cast(a as array<string>) from t
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
   "sqlState" : "42K09",
@@ -153,7 +153,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select cast(a as struct<s:string>) from t
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
   "sqlState" : "42K09",
@@ -175,7 +175,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select cast(a as map<string, string>) from t
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
   "sqlState" : "42K09",

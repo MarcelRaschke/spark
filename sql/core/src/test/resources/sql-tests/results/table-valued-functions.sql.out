@@ -6,9 +6,10 @@ struct<>
 -- !query output
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2308",
+  "errorClass" : "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
+  "sqlState" : "42883",
   "messageParameters" : {
-    "name" : "dummy"
+    "name" : "`dummy`"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -111,7 +112,7 @@ org.apache.spark.sql.AnalysisException
     "functionName" : "`range`",
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "\"BIGINT\""
   },
   "queryContext" : [ {
@@ -137,7 +138,7 @@ org.apache.spark.sql.AnalysisException
     "functionName" : "`range`",
     "inputSql" : "\"array(1, 2, 3)\"",
     "inputType" : "\"ARRAY<INT>\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "\"BIGINT\""
   },
   "queryContext" : [ {
@@ -188,6 +189,54 @@ struct<i:bigint>
 -- !query output
 0
 1
+
+
+-- !query
+select * from range(0, (select 1))
+-- !query schema
+struct<>
+-- !query output
+org.apache.spark.sql.AnalysisException
+{
+  "errorClass" : "NON_FOLDABLE_ARGUMENT",
+  "sqlState" : "42K08",
+  "messageParameters" : {
+    "funcName" : "`range`",
+    "paramName" : "`end`",
+    "paramType" : "\"BIGINT\""
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 15,
+    "stopIndex" : 34,
+    "fragment" : "range(0, (select 1))"
+  } ]
+}
+
+
+-- !query
+select * from values (0, 1) t(c1, c2), lateral range(0, c2)
+-- !query schema
+struct<>
+-- !query output
+org.apache.spark.sql.AnalysisException
+{
+  "errorClass" : "NON_FOLDABLE_ARGUMENT",
+  "sqlState" : "42K08",
+  "messageParameters" : {
+    "funcName" : "`range`",
+    "paramName" : "`end`",
+    "paramType" : "\"BIGINT\""
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 48,
+    "stopIndex" : 59,
+    "fragment" : "range(0, c2)"
+  } ]
+}
 
 
 -- !query
@@ -243,18 +292,26 @@ b	2
 
 
 -- !query
+select * from explode(array(rand(0)))
+-- !query schema
+struct<col:double>
+-- !query output
+0.7604953758285915
+
+
+-- !query
 select * from explode(null)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"explode(NULL)\""
   },
@@ -273,14 +330,14 @@ select * from explode(null) t(c1)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"explode(NULL)\""
   },
@@ -299,14 +356,14 @@ select * from explode(1)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"explode(1)\""
   },
@@ -353,7 +410,7 @@ struct<>
 org.apache.spark.sql.AnalysisException
 {
   "errorClass" : "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
-  "sqlState" : "0A000",
+  "sqlState" : "42K0E",
   "messageParameters" : {
     "expression" : "\"explode(explode(array(1)))\""
   },
@@ -374,10 +431,11 @@ struct<>
 -- !query output
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "2",
-    "funcName" : "explode",
+    "funcName" : "`explode`",
     "outColsNum" : "1"
   },
   "queryContext" : [ {
@@ -475,14 +533,14 @@ select * from inline(null)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"NULL\"",
     "inputType" : "\"VOID\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"ARRAY<STRUCT>\"",
     "sqlExpr" : "\"inline(NULL)\""
   },
@@ -503,10 +561,11 @@ struct<>
 -- !query output
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "3",
-    "funcName" : "inline",
+    "funcName" : "`inline`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -593,14 +652,14 @@ select * from posexplode(1)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "(\"ARRAY\" or \"MAP\")",
     "sqlExpr" : "\"posexplode(1)\""
   },
@@ -647,7 +706,7 @@ struct<>
 org.apache.spark.sql.AnalysisException
 {
   "errorClass" : "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
-  "sqlState" : "0A000",
+  "sqlState" : "42K0E",
   "messageParameters" : {
     "expression" : "\"posexplode(explode(array(1)))\""
   },
@@ -668,10 +727,11 @@ struct<>
 -- !query output
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "1",
-    "funcName" : "posexplode",
+    "funcName" : "`posexplode`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -799,7 +859,7 @@ select * from json_tuple('{"a": 1}', 1)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.NON_STRING_TYPE",
   "sqlState" : "42K09",
@@ -822,7 +882,7 @@ select * from json_tuple('{"a": 1}', null)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.NON_STRING_TYPE",
   "sqlState" : "42K09",
@@ -847,10 +907,11 @@ struct<>
 -- !query output
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "1",
-    "funcName" : "json_tuple",
+    "funcName" : "`json_tuple`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -944,10 +1005,11 @@ struct<>
 -- !query output
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2307",
+  "errorClass" : "NUM_TABLE_VALUE_ALIASES_MISMATCH",
+  "sqlState" : "42826",
   "messageParameters" : {
     "aliasesNum" : "3",
-    "funcName" : "stack",
+    "funcName" : "`stack`",
     "outColsNum" : "2"
   },
   "queryContext" : [ {
@@ -965,7 +1027,7 @@ select * from stack(2, 1, '1.1', 'a', 2, 2.2, 'b')
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES",
   "sqlState" : "42K09",
@@ -995,7 +1057,7 @@ struct<>
 org.apache.spark.sql.AnalysisException
 {
   "errorClass" : "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
-  "sqlState" : "0A000",
+  "sqlState" : "42K0E",
   "messageParameters" : {
     "expression" : "\"stack(2, explode(array(1, 2, 3)))\""
   },

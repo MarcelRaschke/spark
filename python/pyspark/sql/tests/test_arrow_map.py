@@ -18,6 +18,7 @@ import os
 import time
 import unittest
 
+from pyspark.sql.utils import PythonException
 from pyspark.testing.sqlutils import (
     ReusedSQLTestCase,
     have_pandas,
@@ -64,6 +65,21 @@ class MapInArrowTestsMixin(object):
         expected = df.collect()
         self.assertEqual(actual, expected)
 
+    def test_large_variable_width_types(self):
+        with self.sql_conf({"spark.sql.execution.arrow.useLargeVarTypes": True}):
+            data = [("foo", b"foo"), (None, None), ("bar", b"bar")]
+            df = self.spark.createDataFrame(data, "a string, b binary")
+
+            def func(iterator):
+                for batch in iterator:
+                    assert isinstance(batch, pa.RecordBatch)
+                    assert batch.schema.types == [pa.large_string(), pa.large_binary()]
+                    yield batch
+
+            actual = df.mapInArrow(func, df.schema).collect()
+            expected = df.collect()
+            self.assertEqual(actual, expected)
+
     def test_different_output_length(self):
         def func(iterator):
             for _ in iterator:
@@ -72,6 +88,31 @@ class MapInArrowTestsMixin(object):
         df = self.spark.range(10)
         actual = df.repartition(1).mapInArrow(func, "a long").collect()
         self.assertEqual(set((r.a for r in actual)), set(range(100)))
+
+    def test_other_than_recordbatch_iter(self):
+        with self.quiet():
+            self.check_other_than_recordbatch_iter()
+
+    def check_other_than_recordbatch_iter(self):
+        def not_iter(_):
+            return 1
+
+        def bad_iter_elem(_):
+            return iter([1])
+
+        with self.assertRaisesRegex(
+            PythonException,
+            "Return type of the user-defined function should be iterator "
+            "of pyarrow.RecordBatch, but is int",
+        ):
+            (self.spark.range(10, numPartitions=3).mapInArrow(not_iter, "a int").count())
+
+        with self.assertRaisesRegex(
+            PythonException,
+            "Return type of the user-defined function should be iterator "
+            "of pyarrow.RecordBatch, but is iterator of int",
+        ):
+            (self.spark.range(10, numPartitions=3).mapInArrow(bad_iter_elem, "a int").count())
 
     def test_empty_iterator(self):
         def empty_iter(_):
@@ -103,6 +144,31 @@ class MapInArrowTestsMixin(object):
         actual = df2.join(df2).collect()
         expected = df1.join(df1).collect()
         self.assertEqual(sorted(actual), sorted(expected))
+
+    def test_map_in_arrow_with_barrier_mode(self):
+        df = self.spark.range(10)
+
+        def func1(iterator):
+            from pyspark import TaskContext, BarrierTaskContext
+
+            tc = TaskContext.get()
+            assert tc is not None
+            assert not isinstance(tc, BarrierTaskContext)
+            for batch in iterator:
+                yield batch
+
+        df.mapInArrow(func1, "id long", False).collect()
+
+        def func2(iterator):
+            from pyspark import TaskContext, BarrierTaskContext
+
+            tc = TaskContext.get()
+            assert tc is not None
+            assert isinstance(tc, BarrierTaskContext)
+            for batch in iterator:
+                yield batch
+
+        df.mapInArrow(func2, "id long", True).collect()
 
 
 class MapInArrowTests(MapInArrowTestsMixin, ReusedSQLTestCase):

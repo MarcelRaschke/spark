@@ -1,5 +1,6 @@
 -- Set operations in correlation path
 
+--ONLY_IF spark
 CREATE OR REPLACE TEMP VIEW t0(t0a, t0b) AS VALUES (1, 1), (2, 0);
 CREATE OR REPLACE TEMP VIEW t1(t1a, t1b, t1c) AS VALUES (1, 1, 3);
 CREATE OR REPLACE TEMP VIEW t2(t2a, t2b, t2c) AS VALUES (1, 1, 5), (2, 2, 7);
@@ -617,5 +618,25 @@ SELECT t0a, (SELECT sum(d) FROM
   EXCEPT DISTINCT
   SELECT sum(t2a) + t0a as d
   FROM   t2)
+)
+FROM t0;
+
+-- Correlated references in join predicates
+SELECT t0a, (SELECT sum(t1b) FROM
+  (SELECT t1b
+  FROM   t1 join t2 ON (t1a = t0a and t1b = t2b)
+  UNION ALL
+  SELECT t2b
+  FROM   t1 join t2 ON (t2a = t0a and t1a = t2a))
+)
+FROM t0;
+
+
+SELECT t0a, (SELECT sum(t1b) FROM
+  (SELECT t1b
+  FROM   t1 left join t2 ON (t1a = t0a and t1b = t2b)
+  UNION ALL
+  SELECT t2b
+  FROM   t1 join t2 ON (t2a = t0a + 1 and t1a = t2a))
 )
 FROM t0;

@@ -25,9 +25,10 @@ import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.DataTypeMismatch
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenContext
 import org.apache.spark.sql.catalyst.util._
+import org.apache.spark.sql.catalyst.util.TypeUtils.ordinalNumber
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
-import org.apache.spark.unsafe.types.UTF8String
+import org.apache.spark.unsafe.types.{UTF8String, VariantVal}
 
 class ComplexTypeSuite extends SparkFunSuite with ExpressionEvalHelper {
 
@@ -358,6 +359,38 @@ class ComplexTypeSuite extends SparkFunSuite with ExpressionEvalHelper {
     )
   }
 
+  // map key can't be variant
+  val map6 = CreateMap(Seq(
+    Literal.create(new VariantVal(Array[Byte](), Array[Byte]())),
+    Literal.create(1)
+  ))
+  map6.checkInputDataTypes() match {
+    case TypeCheckResult.TypeCheckSuccess => fail("should not allow variant as a part of map key")
+    case TypeCheckResult.DataTypeMismatch(errorSubClass, messageParameters) =>
+      assert(errorSubClass == "INVALID_MAP_KEY_TYPE")
+      assert(messageParameters === Map("keyType" -> "\"VARIANT\""))
+  }
+
+  // map key can't contain variant
+  val map7 = CreateMap(
+    Seq(
+      CreateStruct(
+        Seq(Literal.create(1), Literal.create(new VariantVal(Array[Byte](), Array[Byte]())))
+      ),
+      Literal.create(1)
+    )
+  )
+  map7.checkInputDataTypes() match {
+    case TypeCheckResult.TypeCheckSuccess => fail("should not allow variant as a part of map key")
+    case TypeCheckResult.DataTypeMismatch(errorSubClass, messageParameters) =>
+      assert(errorSubClass == "INVALID_MAP_KEY_TYPE")
+      assert(
+        messageParameters === Map(
+          "keyType" -> "\"STRUCT<col1: INT NOT NULL, col2: VARIANT NOT NULL>\""
+        )
+      )
+  }
+
   test("MapFromArrays") {
     val intSeq = Seq(5, 10, 15, 20, 25)
     val longSeq = intSeq.map(_.toLong)
@@ -541,7 +574,7 @@ class ComplexTypeSuite extends SparkFunSuite with ExpressionEvalHelper {
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_INPUT_TYPE",
         messageParameters = Map(
-          "paramIndex" -> "1",
+          "paramIndex" -> ordinalNumber(0),
           "requiredType" -> "\"STRING\"",
           "inputSql" -> "\"NULL\"",
           "inputType" -> "\"VOID\""
@@ -552,7 +585,7 @@ class ComplexTypeSuite extends SparkFunSuite with ExpressionEvalHelper {
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_INPUT_TYPE",
         messageParameters = Map(
-          "paramIndex" -> "2",
+          "paramIndex" -> ordinalNumber(1),
           "requiredType" -> "\"STRING\"",
           "inputSql" -> "\"NULL\"",
           "inputType" -> "\"VOID\""
@@ -564,7 +597,7 @@ class ComplexTypeSuite extends SparkFunSuite with ExpressionEvalHelper {
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_INPUT_TYPE",
         messageParameters = Map(
-          "paramIndex" -> "2",
+          "paramIndex" -> ordinalNumber(1),
           "requiredType" -> "\"STRING\"",
           "inputSql" -> "\"NULL\"",
           "inputType" -> "\"VOID\""
@@ -575,7 +608,7 @@ class ComplexTypeSuite extends SparkFunSuite with ExpressionEvalHelper {
       DataTypeMismatch(
         errorSubClass = "UNEXPECTED_INPUT_TYPE",
         messageParameters = Map(
-          "paramIndex" -> "1",
+          "paramIndex" -> ordinalNumber(0),
           "requiredType" -> "\"STRING\"",
           "inputSql" -> "\"NULL\"",
           "inputType" -> "\"VOID\""

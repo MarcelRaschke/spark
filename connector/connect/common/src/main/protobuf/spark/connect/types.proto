@@ -21,6 +21,7 @@ package spark.connect;
 
 option java_multiple_files = true;
 option java_package = "org.apache.spark.connect.proto";
+option go_package = "internal/generated";
 
 // This message describes the logical [[DataType]] of something. It does not carry the value
 // itself but only describes it.
@@ -61,6 +62,7 @@ message DataType {
     Array array = 20;
     Struct struct = 21;
     Map map = 22;
+    Variant variant = 25;
 
     // UserDefinedType
     UDT udt = 23;
@@ -99,6 +101,7 @@ message DataType {
 
   message String {
     uint32 type_variation_reference = 1;
+    string collation = 2;
   }
 
   message Binary {
@@ -177,6 +180,10 @@ message DataType {
     DataType value_type = 2;
     bool value_contains_null = 3;
     uint32 type_variation_reference = 4;
+  }
+
+  message Variant {
+    uint32 type_variation_reference = 1;
   }
 
   message UDT {

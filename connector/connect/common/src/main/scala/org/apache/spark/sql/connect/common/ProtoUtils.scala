@@ -17,68 +17,59 @@
 
 package org.apache.spark.sql.connect.common
 
-import scala.collection.JavaConverters._
+import com.google.protobuf.{CodedInputStream, InvalidProtocolBufferException, Message, Parser}
 
-import com.google.protobuf.{ByteString, Message}
-import com.google.protobuf.Descriptors.FieldDescriptor
+private[sql] object ProtoUtils {
+  def abbreviate[T <: Message](message: T, maxStringSize: Int = 1024): T = {
+    abbreviate[T](message, Map("STRING" -> maxStringSize))
+  }
 
-private[connect] object ProtoUtils {
-  private val format = java.text.NumberFormat.getInstance()
-  private val MAX_BYTES_SIZE = 8
-  private val MAX_STRING_SIZE = 1024
+  def abbreviate[T <: Message](message: T, thresholds: Map[String, Int]): T = {
+    new Abbreviator(thresholds).abbreviate[T](message)
+  }
 
-  def abbreviate(message: Message): Message = {
-    val builder = message.toBuilder
+  // Because Spark Connect operation tags are also set as SparkContext Job tags, they cannot contain
+  // SparkContext.SPARK_JOB_TAGS_SEP
+  private val SPARK_JOB_TAGS_SEP = ',' // SparkContext.SPARK_JOB_TAGS_SEP
 
-    message.getAllFields.asScala.iterator.foreach {
-      case (field: FieldDescriptor, string: String)
-          if field.getJavaType == FieldDescriptor.JavaType.STRING && string != null =>
-        val size = string.size
-        if (size > MAX_STRING_SIZE) {
-          builder.setField(field, createString(string.take(MAX_STRING_SIZE), size))
-        } else {
-          builder.setField(field, string)
-        }
-
-      case (field: FieldDescriptor, byteString: ByteString)
-          if field.getJavaType == FieldDescriptor.JavaType.BYTE_STRING && byteString != null =>
-        val size = byteString.size
-        if (size > MAX_BYTES_SIZE) {
-          val prefix = Array.tabulate(MAX_BYTES_SIZE)(byteString.byteAt)
-          builder.setField(field, createByteString(prefix, size))
-        } else {
-          builder.setField(field, byteString)
-        }
-
-      case (field: FieldDescriptor, byteArray: Array[Byte])
-          if field.getJavaType == FieldDescriptor.JavaType.BYTE_STRING && byteArray != null =>
-        val size = byteArray.size
-        if (size > MAX_BYTES_SIZE) {
-          val prefix = byteArray.take(MAX_BYTES_SIZE)
-          builder.setField(field, createByteString(prefix, size))
-        } else {
-          builder.setField(field, byteArray)
-        }
-
-      // TODO(SPARK-43117): should also support 1, repeated msg; 2, map<xxx, msg>
-      case (field: FieldDescriptor, msg: Message)
-          if field.getJavaType == FieldDescriptor.JavaType.MESSAGE && msg != null =>
-        builder.setField(field, abbreviate(msg))
-
-      case (field: FieldDescriptor, value: Any) => builder.setField(field, value)
+  /**
+   * Validate if a tag for ExecutePlanRequest.tags is valid. Throw IllegalArgumentException if
+   * not.
+   */
+  def throwIfInvalidTag(tag: String): Unit = {
+    // Same format rules apply to Spark Connect execution tags as to SparkContext job tags,
+    // because the Spark Connect job tag is also used as part of SparkContext job tag.
+    // See SparkContext.throwIfInvalidTag and ExecuteHolderSessionTag
+    if (tag == null) {
+      throw new IllegalArgumentException("Spark Connect tag cannot be null.")
     }
-
-    builder.build()
+    if (tag.contains(SPARK_JOB_TAGS_SEP)) {
+      throw new IllegalArgumentException(
+        s"Spark Connect tag cannot contain '$SPARK_JOB_TAGS_SEP'.")
+    }
+    if (tag.isEmpty) {
+      throw new IllegalArgumentException("Spark Connect tag cannot be an empty string.")
+    }
   }
 
-  private def createByteString(prefix: Array[Byte], size: Int): ByteString = {
-    ByteString.copyFrom(
-      List(
-        ByteString.copyFrom(prefix),
-        ByteString.copyFromUtf8(s"[truncated(size=${format.format(size)})]")).asJava)
-  }
-
-  private def createString(prefix: String, size: Int): String = {
-    s"$prefix[truncated(size=${format.format(size)})]"
+  def parseWithRecursionLimit[T <: Message](
+      bytes: Array[Byte],
+      parser: Parser[T],
+      recursionLimit: Int): T = {
+    val cis = CodedInputStream.newInstance(bytes)
+    cis.setSizeLimit(Integer.MAX_VALUE)
+    cis.setRecursionLimit(recursionLimit)
+    val message = parser.parseFrom(cis)
+    try {
+      // If the last tag is 0, it means the message is correctly parsed.
+      // If the last tag is not 0, it means the message is not correctly
+      // parsed, and we should throw an exception.
+      cis.checkLastTagWas(0)
+      message
+    } catch {
+      case e: InvalidProtocolBufferException =>
+        e.setUnfinishedMessage(message)
+        throw e
+    }
   }
 }

@@ -40,7 +40,7 @@ CreateTempViewUsing [tableIdent:`show_t3` StructType(StructField(e,IntegerType,t
 -- !query
 CREATE GLOBAL TEMP VIEW show_t4 AS SELECT 1 as col1
 -- !query analysis
-CreateViewCommand `show_t4`, SELECT 1 as col1, false, false, GlobalTempView, true
+CreateViewCommand `show_t4`, SELECT 1 as col1, false, false, GlobalTempView, UNSUPPORTED, true
    +- Project [1 AS col1#x]
       +- OneRowRelation
 
@@ -130,13 +130,20 @@ org.apache.spark.sql.catalyst.parser.ParseException
 -- !query
 SHOW TABLE EXTENDED LIKE 'show_t*' PARTITION(c='Us', d=1)
 -- !query analysis
-org.apache.spark.sql.catalyst.analysis.NoSuchTableException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "TABLE_OR_VIEW_NOT_FOUND",
   "sqlState" : "42P01",
   "messageParameters" : {
-    "relationName" : "`showdb`.`show_t*`"
-  }
+    "relationName" : "`show_t*`"
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 26,
+    "stopIndex" : 34,
+    "fragment" : "'show_t*'"
+  } ]
 }
 
 
@@ -184,13 +191,15 @@ org.apache.spark.sql.catalyst.analysis.NoSuchPartitionException
 -- !query
 DROP TABLE show_t1
 -- !query analysis
-DropTableCommand `spark_catalog`.`showdb`.`show_t1`, false, false, false
+DropTable false, false
++- ResolvedIdentifier V2SessionCatalog(spark_catalog), showdb.show_t1
 
 
 -- !query
 DROP TABLE show_t2
 -- !query analysis
-DropTableCommand `spark_catalog`.`showdb`.`show_t2`, false, false, false
+DropTable false, false
++- ResolvedIdentifier V2SessionCatalog(spark_catalog), showdb.show_t2
 
 
 -- !query

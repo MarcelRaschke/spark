@@ -19,10 +19,11 @@ package org.apache.spark.sql.catalyst.analysis
 
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.SQLConfHelper
-import org.apache.spark.sql.catalyst.expressions.{AliasHelper, Attribute, Expression, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{AliasHelper, Attribute, Expression, IntegerLiteral, Literal, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, AppendColumns, LogicalPlan}
 import org.apache.spark.sql.catalyst.trees.TreePattern.{LATERAL_COLUMN_ALIAS_REFERENCE, UNRESOLVED_ATTRIBUTE}
+import org.apache.spark.sql.connector.catalog.CatalogManager
 
 /**
  * A virtual rule to resolve [[UnresolvedAttribute]] in [[Aggregate]]. It's only used by the real
@@ -46,8 +47,9 @@ import org.apache.spark.sql.catalyst.trees.TreePattern.{LATERAL_COLUMN_ALIAS_REF
  * 5. Resolves the columns to outer references with the outer plan if we are resolving subquery
  *    expressions.
  */
-object ResolveReferencesInAggregate extends SQLConfHelper
+class ResolveReferencesInAggregate(val catalogManager: CatalogManager) extends SQLConfHelper
   with ColumnResolutionHelper with AliasHelper {
+
   def apply(a: Aggregate): Aggregate = {
     val planForResolve = a.child match {
       // SPARK-25942: Resolves aggregate expressions with `AppendColumns`'s children, instead of
@@ -57,23 +59,23 @@ object ResolveReferencesInAggregate extends SQLConfHelper
       case _ => a
     }
 
-    val resolvedGroupExprsNoOuter = a.groupingExpressions
-      .map(resolveExpressionByPlanChildren(_, planForResolve, allowOuter = false))
-    val resolvedAggExprsNoOuter = a.aggregateExpressions.map(
-      resolveExpressionByPlanChildren(_, planForResolve, allowOuter = false))
-    val resolvedAggExprsWithLCA = resolveLateralColumnAlias(resolvedAggExprsNoOuter)
-    val resolvedAggExprsWithOuter = resolvedAggExprsWithLCA.map(resolveOuterRef)
+    val resolvedGroupExprsBasic = a.groupingExpressions
+      .map(resolveExpressionByPlanChildren(_, planForResolve))
+    val resolvedAggExprsBasic = a.aggregateExpressions.map(
+      resolveExpressionByPlanChildren(_, planForResolve))
+    val resolvedAggExprsWithLCA = resolveLateralColumnAlias(resolvedAggExprsBasic)
+    val resolvedAggExprsFinal = resolvedAggExprsWithLCA.map(resolveColsLastResort)
       .map(_.asInstanceOf[NamedExpression])
     // `groupingExpressions` may rely on `aggregateExpressions`, due to features like GROUP BY alias
     // and GROUP BY ALL. We only do basic resolution for `groupingExpressions`, and will further
     // resolve it after `aggregateExpressions` are all resolved. Note: the basic resolution is
     // needed as `aggregateExpressions` may rely on `groupingExpressions` as well, for the session
     // window feature. See the rule `SessionWindowing` for more details.
-    val resolvedGroupExprs = if (resolvedAggExprsWithOuter.forall(_.resolved)) {
+    val resolvedGroupExprs = if (resolvedAggExprsFinal.forall(_.resolved)) {
       val resolved = resolveGroupByAll(
-        resolvedAggExprsWithOuter,
-        resolveGroupByAlias(resolvedAggExprsWithOuter, resolvedGroupExprsNoOuter)
-      ).map(resolveOuterRef)
+        resolvedAggExprsFinal,
+        resolveGroupByAlias(resolvedAggExprsFinal, resolvedGroupExprsBasic)
+      ).map(resolveColsLastResort)
       // TODO: currently we don't support LCA in `groupingExpressions` yet.
       if (resolved.exists(_.containsPattern(LATERAL_COLUMN_ALIAS_REFERENCE))) {
         throw new AnalysisException(
@@ -87,7 +89,7 @@ object ResolveReferencesInAggregate extends SQLConfHelper
       // alias/ALL in the next iteration. If aggregate expressions end up as unresolved, we don't
       // need to resolve grouping expressions at all, as `CheckAnalysis` will report error for
       // aggregate expressions first.
-      resolvedGroupExprsNoOuter
+      resolvedGroupExprsBasic
     }
     a.copy(
       // The aliases in grouping expressions are useless and will be removed at the end of analysis
@@ -103,7 +105,7 @@ object ResolveReferencesInAggregate extends SQLConfHelper
         //       GROUP BY will be removed eventually, by following iterations.
         if (e.resolved) trimAliases(e) else e
       },
-      aggregateExpressions = resolvedAggExprsWithOuter)
+      aggregateExpressions = resolvedAggExprsFinal)
   }
 
   private def resolveGroupByAlias(
@@ -134,7 +136,19 @@ object ResolveReferencesInAggregate extends SQLConfHelper
         groupExprs
       } else {
         // This is a valid GROUP BY ALL aggregate.
-        expandedGroupExprs.get
+        expandedGroupExprs.get.zipWithIndex.map { case (expr, index) =>
+          trimAliases(expr) match {
+            // HACK ALERT: If the expanded grouping expression is an integer literal, don't use it
+            //             but use an integer literal of the index. The reason is we may repeatedly
+            //             analyze the plan, and the original integer literal may cause failures
+            //             with a later GROUP BY ordinal resolution. GROUP BY constant is
+            //             meaningless so whatever value does not matter here.
+            case IntegerLiteral(_) =>
+              // GROUP BY ordinal uses 1-based index.
+              Literal(index + 1)
+            case _ => expr
+          }
+        }
       }
     } else {
       groupExprs

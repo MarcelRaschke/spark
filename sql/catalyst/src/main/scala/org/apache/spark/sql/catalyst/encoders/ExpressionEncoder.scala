@@ -20,14 +20,15 @@ package org.apache.spark.sql.catalyst.encoders
 import scala.reflect.ClassTag
 import scala.reflect.runtime.universe.TypeTag
 
-import org.apache.spark.sql.Encoder
-import org.apache.spark.sql.catalyst.{InternalRow, JavaTypeInference, ScalaReflection}
+import org.apache.spark.sql.{Encoder, Row}
+import org.apache.spark.sql.catalyst.{DeserializerBuildHelper, InternalRow, JavaTypeInference, ScalaReflection, SerializerBuildHelper}
 import org.apache.spark.sql.catalyst.analysis.{Analyzer, GetColumnByOrdinal, SimpleAnalyzer, UnresolvedAttribute, UnresolvedExtractValue}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder.{Deserializer, Serializer}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.objects.{AssertNotNull, InitializeJavaBean, Invoke, NewInstance}
 import org.apache.spark.sql.catalyst.optimizer.{ReassignLambdaVariableID, SimplifyCasts}
 import org.apache.spark.sql.catalyst.plans.logical.{CatalystSerde, DeserializeToObject, LeafNode, LocalRelation}
+import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.types.{ObjectType, StringType, StructField, StructType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -52,9 +53,15 @@ object ExpressionEncoder {
 
   def apply[T](enc: AgnosticEncoder[T]): ExpressionEncoder[T] = {
     new ExpressionEncoder[T](
-      ScalaReflection.serializerFor(enc),
-      ScalaReflection.deserializerFor(enc),
+      SerializerBuildHelper.createSerializer(enc),
+      DeserializerBuildHelper.createDeserializer(enc),
       enc.clsTag)
+  }
+
+  def apply(schema: StructType): ExpressionEncoder[Row] = apply(schema, lenient = false)
+
+  def apply(schema: StructType, lenient: Boolean): ExpressionEncoder[Row] = {
+    apply(RowEncoder.encoderFor(schema, lenient))
   }
 
   // TODO: improve error message for java bean encoder.
@@ -66,8 +73,14 @@ object ExpressionEncoder {
    * Given a set of N encoders, constructs a new encoder that produce objects as items in an
    * N-tuple.  Note that these encoders should be unresolved so that information about
    * name/positional binding is preserved.
+   * When `useNullSafeDeserializer` is true, the deserialization result for a child will be null if
+   * the input is null. It is false by default as most deserializers handle null input properly and
+   * don't require an extra null check. Some of them are null-tolerant, such as the deserializer for
+   * `Option[T]`, and we must not set it to true in this case.
    */
-  def tuple(encoders: Seq[ExpressionEncoder[_]]): ExpressionEncoder[_] = {
+  def tuple(
+      encoders: Seq[ExpressionEncoder[_]],
+      useNullSafeDeserializer: Boolean = false): ExpressionEncoder[_] = {
     if (encoders.length > 22) {
       throw QueryExecutionErrors.elementsOfTupleExceedLimitError()
     }
@@ -112,7 +125,7 @@ object ExpressionEncoder {
         case GetColumnByOrdinal(0, _) => input
       }
 
-      if (enc.objSerializer.nullable) {
+      if (useNullSafeDeserializer && enc.objSerializer.nullable) {
         nullSafe(input, childDeserializer)
       } else {
         childDeserializer
@@ -163,7 +176,7 @@ object ExpressionEncoder {
    * Function that deserializes an [[InternalRow]] into an object of type `T`. This class is not
    * thread-safe.
    */
-  class Deserializer[T](private val expressions: Seq[Expression])
+  class Deserializer[T](val expressions: Seq[Expression])
     extends (InternalRow => T) with Serializable {
     @transient
     private[this] var constructProjection: Projection = _
@@ -318,10 +331,18 @@ case class ExpressionEncoder[T](
   assert(serializer.forall(_.references.isEmpty), "serializer cannot reference any attributes.")
   assert(serializer.flatMap { ser =>
     val boundRefs = ser.collect { case b: BoundReference => b }
-    assert(boundRefs.nonEmpty,
-      "each serializer expression should contain at least one `BoundReference`")
+    assert(boundRefs.nonEmpty || isEmptyStruct(ser),
+      "each serializer expression should contain at least one `BoundReference` or it " +
+      "should be an empty struct. This is required to ensure that there is a reference point " +
+      "for the serialized object or that the serialized object is intentionally left empty."
+    )
     boundRefs
   }.distinct.length <= 1, "all serializer expressions must use the same BoundReference.")
+
+  private def isEmptyStruct(expr: NamedExpression): Boolean = expr.dataType match {
+    case struct: StructType => struct.isEmpty
+    case _ => false
+  }
 
   /**
    * Returns a new copy of this encoder, where the `deserializer` is resolved and bound to the
@@ -333,7 +354,7 @@ case class ExpressionEncoder[T](
    * this method to do resolution and binding outside of query framework.
    */
   def resolveAndBind(
-      attrs: Seq[Attribute] = schema.toAttributes,
+      attrs: Seq[Attribute] = DataTypeUtils.toAttributes(schema),
       analyzer: Analyzer = SimpleAnalyzer): ExpressionEncoder[T] = {
     val dummyPlan = CatalystSerde.deserialize(LocalRelation(attrs))(this)
     val analyzedPlan = analyzer.execute(dummyPlan)
@@ -393,7 +414,7 @@ case class ExpressionEncoder[T](
    * has not been done already in places where we plan to do later composition of encoders.
    */
   def assertUnresolved(): Unit = {
-    (deserializer +:  serializer).foreach(_.foreach {
+    (deserializer +: serializer).foreach(_.foreach {
       case a: AttributeReference if a.name != "loopVar" =>
         throw QueryExecutionErrors.notExpectedUnresolvedEncoderError(a)
       case _ =>

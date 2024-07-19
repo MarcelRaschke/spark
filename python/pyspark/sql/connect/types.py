@@ -20,7 +20,7 @@ check_dependencies(__name__)
 
 import json
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from pyspark.sql.types import (
     DataType,
@@ -33,6 +33,7 @@ from pyspark.sql.types import (
     TimestampNTZType,
     DayTimeIntervalType,
     YearMonthIntervalType,
+    CalendarIntervalType,
     MapType,
     StringType,
     CharType,
@@ -46,21 +47,12 @@ from pyspark.sql.types import (
     BinaryType,
     BooleanType,
     NullType,
+    VariantType,
     UserDefinedType,
 )
-from pyspark.errors import PySparkAssertionError
+from pyspark.errors import PySparkAssertionError, PySparkValueError
 
 import pyspark.sql.connect.proto as pb2
-
-
-JVM_BYTE_MIN: int = -(1 << 7)
-JVM_BYTE_MAX: int = (1 << 7) - 1
-JVM_SHORT_MIN: int = -(1 << 15)
-JVM_SHORT_MAX: int = (1 << 15) - 1
-JVM_INT_MIN: int = -(1 << 31)
-JVM_INT_MAX: int = (1 << 31) - 1
-JVM_LONG_MIN: int = -(1 << 63)
-JVM_LONG_MAX: int = (1 << 63) - 1
 
 
 class UnparsedDataType(DataType):
@@ -137,7 +129,7 @@ def pyspark_types_to_proto_types(data_type: DataType) -> pb2.DataType:
     if isinstance(data_type, NullType):
         ret.null.CopyFrom(pb2.DataType.NULL())
     elif isinstance(data_type, StringType):
-        ret.string.CopyFrom(pb2.DataType.String())
+        ret.string.collation = data_type.collation
     elif isinstance(data_type, BooleanType):
         ret.boolean.CopyFrom(pb2.DataType.Boolean())
     elif isinstance(data_type, BinaryType):
@@ -169,7 +161,10 @@ def pyspark_types_to_proto_types(data_type: DataType) -> pb2.DataType:
     elif isinstance(data_type, YearMonthIntervalType):
         ret.year_month_interval.start_field = data_type.startField
         ret.year_month_interval.end_field = data_type.endField
+    elif isinstance(data_type, CalendarIntervalType):
+        ret.calendar_interval.CopyFrom(pb2.DataType.CalendarInterval())
     elif isinstance(data_type, StructType):
+        struct = pb2.DataType.Struct()
         for field in data_type.fields:
             struct_field = pb2.DataType.StructField()
             struct_field.name = field.name
@@ -177,7 +172,8 @@ def pyspark_types_to_proto_types(data_type: DataType) -> pb2.DataType:
             struct_field.nullable = field.nullable
             if field.metadata is not None and len(field.metadata) > 0:
                 struct_field.metadata = json.dumps(field.metadata)
-            ret.struct.fields.append(struct_field)
+            struct.fields.append(struct_field)
+        ret.struct.CopyFrom(struct)
     elif isinstance(data_type, MapType):
         ret.map.key_type.CopyFrom(pyspark_types_to_proto_types(data_type.keyType))
         ret.map.value_type.CopyFrom(pyspark_types_to_proto_types(data_type.valueType))
@@ -185,6 +181,8 @@ def pyspark_types_to_proto_types(data_type: DataType) -> pb2.DataType:
     elif isinstance(data_type, ArrayType):
         ret.array.element_type.CopyFrom(pyspark_types_to_proto_types(data_type.elementType))
         ret.array.contains_null = data_type.containsNull
+    elif isinstance(data_type, VariantType):
+        ret.variant.CopyFrom(pb2.DataType.Variant())
     elif isinstance(data_type, UserDefinedType):
         json_value = data_type.jsonValue()
         ret.udt.type = "udt"
@@ -200,7 +198,10 @@ def pyspark_types_to_proto_types(data_type: DataType) -> pb2.DataType:
         data_type_string = data_type.data_type_string
         ret.unparsed.data_type_string = data_type_string
     else:
-        raise Exception(f"Unsupported data type {data_type}")
+        raise PySparkValueError(
+            error_class="UNSUPPORTED_OPERATION",
+            message_parameters={"operation": f"data type {data_type}"},
+        )
     return ret
 
 
@@ -228,7 +229,8 @@ def proto_schema_to_pyspark_data_type(schema: pb2.DataType) -> DataType:
         s = schema.decimal.scale if schema.decimal.HasField("scale") else 0
         return DecimalType(precision=p, scale=s)
     elif schema.HasField("string"):
-        return StringType()
+        collation = schema.string.collation if schema.string.collation != "" else "UTF8_BINARY"
+        return StringType(collation)
     elif schema.HasField("char"):
         return CharType(schema.char.length)
     elif schema.HasField("var_char"):
@@ -263,6 +265,8 @@ def proto_schema_to_pyspark_data_type(schema: pb2.DataType) -> DataType:
             else None
         )
         return YearMonthIntervalType(startField=start, endField=end)
+    elif schema.HasField("calendar_interval"):
+        return CalendarIntervalType()
     elif schema.HasField("array"):
         return ArrayType(
             proto_schema_to_pyspark_data_type(schema.array.element_type),
@@ -287,6 +291,8 @@ def proto_schema_to_pyspark_data_type(schema: pb2.DataType) -> DataType:
             proto_schema_to_pyspark_data_type(schema.map.value_type),
             schema.map.value_contains_null,
         )
+    elif schema.HasField("variant"):
+        return VariantType()
     elif schema.HasField("udt"):
         assert schema.udt.type == "udt"
         json_value = {}
@@ -296,4 +302,79 @@ def proto_schema_to_pyspark_data_type(schema: pb2.DataType) -> DataType:
             json_value["serializedClass"] = schema.udt.serialized_python_class
         return UserDefinedType.fromJson(json_value)
     else:
-        raise Exception(f"Unsupported data type {schema}")
+        raise PySparkValueError(
+            error_class="UNSUPPORTED_OPERATION",
+            message_parameters={"operation": f"data type {schema}"},
+        )
+
+
+# The python version of org.apache.spark.sql.catalyst.util.AttributeNameParser
+def parse_attr_name(name: str) -> Optional[List[str]]:
+    name_parts: List[str] = []
+    tmp: str = ""
+
+    in_backtick = False
+    i = 0
+    n = len(name)
+    while i < n:
+        char = name[i]
+        if in_backtick:
+            if char == "`":
+                if i + 1 < n and name[i + 1] == "`":
+                    tmp += "`"
+                    i += 1
+                else:
+                    in_backtick = False
+                    if i + 1 < n and name[i + 1] != ".":
+                        return None
+            else:
+                tmp += char
+        else:
+            if char == "`":
+                if len(tmp) > 0:
+                    return None
+                in_backtick = True
+            elif char == ".":
+                if name[i - 1] == "." or i == n - 1:
+                    return None
+                name_parts.append(tmp)
+                tmp = ""
+            else:
+                tmp += char
+        i += 1
+
+    if in_backtick:
+        return None
+
+    name_parts.append(tmp)
+    return name_parts
+
+
+# Verify whether the input column name can be resolved with the given schema.
+# Note that this method can not 100% match the analyzer behavior, it is designed to
+# try the best to eliminate unnecessary validation RPCs.
+def verify_col_name(name: str, schema: StructType) -> bool:
+    parts = parse_attr_name(name)
+    if parts is None or len(parts) == 0:
+        return False
+
+    def _quick_verify(parts: List[str], schema: DataType) -> bool:
+        if len(parts) == 0:
+            return True
+
+        _schema: Optional[StructType] = None
+        if isinstance(schema, StructType):
+            _schema = schema
+        elif isinstance(schema, ArrayType) and isinstance(schema.elementType, StructType):
+            _schema = schema.elementType
+        else:
+            return False
+
+        part = parts[0]
+        for field in _schema:
+            if field.name == part:
+                return _quick_verify(parts[1:], field.dataType)
+
+        return False
+
+    return _quick_verify(parts, schema)

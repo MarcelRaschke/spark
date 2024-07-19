@@ -17,14 +17,14 @@
 
 package org.apache.spark.sql.execution.arrow
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 import org.apache.arrow.vector._
 import org.apache.arrow.vector.complex._
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.SpecializedGetters
-import org.apache.spark.sql.errors.QueryExecutionErrors
+import org.apache.spark.sql.errors.ExecutionErrors
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.util.ArrowUtils
 
@@ -60,7 +60,9 @@ object ArrowWriter {
       case (DecimalType.Fixed(precision, scale), vector: DecimalVector) =>
         new DecimalWriter(vector, precision, scale)
       case (StringType, vector: VarCharVector) => new StringWriter(vector)
+      case (StringType, vector: LargeVarCharVector) => new LargeStringWriter(vector)
       case (BinaryType, vector: VarBinaryVector) => new BinaryWriter(vector)
+      case (BinaryType, vector: LargeVarBinaryVector) => new LargeBinaryWriter(vector)
       case (DateType, vector: DateDayVector) => new DateWriter(vector)
       case (TimestampType, vector: TimeStampMicroTZVector) => new TimestampWriter(vector)
       case (TimestampNTZType, vector: TimeStampMicroVector) => new TimestampNTZWriter(vector)
@@ -80,8 +82,15 @@ object ArrowWriter {
       case (NullType, vector: NullVector) => new NullWriter(vector)
       case (_: YearMonthIntervalType, vector: IntervalYearVector) => new IntervalYearWriter(vector)
       case (_: DayTimeIntervalType, vector: DurationVector) => new DurationWriter(vector)
+      case (CalendarIntervalType, vector: IntervalMonthDayNanoVector) =>
+        new IntervalMonthDayNanoWriter(vector)
+      case (VariantType, vector: StructVector) =>
+        val children = (0 until vector.size()).map { ordinal =>
+          createFieldWriter(vector.getChildByOrdinal(ordinal))
+        }
+        new StructWriter(vector, children.toArray)
       case (dt, _) =>
-        throw QueryExecutionErrors.unsupportedDataTypeError(dt)
+        throw ExecutionErrors.unsupportedDataTypeError(dt)
     }
   }
 }
@@ -94,7 +103,7 @@ class ArrowWriter(val root: VectorSchemaRoot, fields: Array[ArrowFieldWriter]) {
 
   def write(row: InternalRow): Unit = {
     var i = 0
-    while (i < fields.size) {
+    while (i < fields.length) {
       fields(i).write(row, i)
       i += 1
     }
@@ -255,8 +264,36 @@ private[arrow] class StringWriter(val valueVector: VarCharVector) extends ArrowF
   }
 }
 
+private[arrow] class LargeStringWriter(
+    val valueVector: LargeVarCharVector) extends ArrowFieldWriter {
+
+  override def setNull(): Unit = {
+    valueVector.setNull(count)
+  }
+
+  override def setValue(input: SpecializedGetters, ordinal: Int): Unit = {
+    val utf8 = input.getUTF8String(ordinal)
+    val utf8ByteBuffer = utf8.getByteBuffer
+    // todo: for off-heap UTF8String, how to pass in to arrow without copy?
+    valueVector.setSafe(count, utf8ByteBuffer, utf8ByteBuffer.position(), utf8.numBytes())
+  }
+}
+
 private[arrow] class BinaryWriter(
     val valueVector: VarBinaryVector) extends ArrowFieldWriter {
+
+  override def setNull(): Unit = {
+    valueVector.setNull(count)
+  }
+
+  override def setValue(input: SpecializedGetters, ordinal: Int): Unit = {
+    val bytes = input.getBinary(ordinal)
+    valueVector.setSafe(count, bytes, 0, bytes.length)
+  }
+}
+
+private[arrow] class LargeBinaryWriter(
+    val valueVector: LargeVarBinaryVector) extends ArrowFieldWriter {
 
   override def setNull(): Unit = {
     valueVector.setNull(count)
@@ -336,6 +373,8 @@ private[arrow] class StructWriter(
     val valueVector: StructVector,
     children: Array[ArrowFieldWriter]) extends ArrowFieldWriter {
 
+  lazy val isVariant = valueVector.getField.getMetadata.get("variant") == "true"
+
   override def setNull(): Unit = {
     var i = 0
     while (i < children.length) {
@@ -347,12 +386,20 @@ private[arrow] class StructWriter(
   }
 
   override def setValue(input: SpecializedGetters, ordinal: Int): Unit = {
-    val struct = input.getStruct(ordinal, children.length)
-    var i = 0
-    valueVector.setIndexDefined(count)
-    while (i < struct.numFields) {
-      children(i).write(struct, i)
-      i += 1
+    if (isVariant) {
+      valueVector.setIndexDefined(count)
+      val v = input.getVariant(ordinal)
+      val row = InternalRow(v.getValue, v.getMetadata)
+      children(0).write(row, 0)
+      children(1).write(row, 1)
+    } else {
+      val struct = input.getStruct(ordinal, children.length)
+      var i = 0
+      valueVector.setIndexDefined(count)
+      while (i < struct.numFields) {
+        children(i).write(struct, i)
+        i += 1
+      }
     }
   }
 
@@ -431,6 +478,18 @@ private[arrow] class DurationWriter(val valueVector: DurationVector)
   }
 
   override def setValue(input: SpecializedGetters, ordinal: Int): Unit = {
-    valueVector.set(count, input.getLong(ordinal))
+    valueVector.setSafe(count, input.getLong(ordinal))
+  }
+}
+
+private[arrow] class IntervalMonthDayNanoWriter(val valueVector: IntervalMonthDayNanoVector)
+  extends ArrowFieldWriter {
+  override def setNull(): Unit = {
+    valueVector.setNull(count)
+  }
+
+  override def setValue(input: SpecializedGetters, ordinal: Int): Unit = {
+    val ci = input.getInterval(ordinal)
+    valueVector.setSafe(count, ci.months, ci.days, Math.multiplyExact(ci.microseconds, 1000L))
   }
 }

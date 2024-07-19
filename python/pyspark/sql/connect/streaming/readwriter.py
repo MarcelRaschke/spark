@@ -14,12 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
 from pyspark.sql.connect.utils import check_dependencies
 
 check_dependencies(__name__)
 
+import json
 import sys
+import pickle
 from typing import cast, overload, Callable, Dict, List, Optional, TYPE_CHECKING, Union
 
 from pyspark.serializers import CloudPickleSerializer
@@ -31,16 +32,16 @@ from pyspark.sql.streaming.readwriter import (
     DataStreamReader as PySparkDataStreamReader,
     DataStreamWriter as PySparkDataStreamWriter,
 )
+from pyspark.sql.streaming.listener import QueryStartedEvent
+from pyspark.sql.connect.utils import get_python_ver
 from pyspark.sql.types import Row, StructType
-from pyspark.errors import PySparkTypeError, PySparkValueError, PySparkNotImplementedError
+from pyspark.errors import PySparkTypeError, PySparkValueError, PySparkPicklingError
 
 if TYPE_CHECKING:
     from pyspark.sql.connect.session import SparkSession
     from pyspark.sql.connect._typing import OptionalPrimitiveType
     from pyspark.sql.connect.dataframe import DataFrame
     from pyspark.sql._typing import SupportsProcess
-
-__all__ = ["DataStreamReader", "DataStreamWriter"]
 
 
 class DataStreamReader(OptionUtils):
@@ -53,7 +54,7 @@ class DataStreamReader(OptionUtils):
     def _df(self, plan: LogicalPlan) -> "DataFrame":
         from pyspark.sql.connect.dataframe import DataFrame
 
-        return DataFrame.withPlan(plan, self._client)
+        return DataFrame(plan, self._client)
 
     def format(self, source: str) -> "DataStreamReader":
         self._format = source
@@ -331,6 +332,60 @@ class DataStreamReader(OptionUtils):
 
     csv.__doc__ = PySparkDataStreamReader.csv.__doc__
 
+    def xml(
+        self,
+        path: str,
+        rowTag: Optional[str] = None,
+        schema: Optional[Union[StructType, str]] = None,
+        excludeAttribute: Optional[Union[bool, str]] = None,
+        attributePrefix: Optional[str] = None,
+        valueTag: Optional[str] = None,
+        ignoreSurroundingSpaces: Optional[Union[bool, str]] = None,
+        rowValidationXSDPath: Optional[str] = None,
+        ignoreNamespace: Optional[Union[bool, str]] = None,
+        wildcardColName: Optional[str] = None,
+        encoding: Optional[str] = None,
+        inferSchema: Optional[Union[bool, str]] = None,
+        nullValue: Optional[str] = None,
+        dateFormat: Optional[str] = None,
+        timestampFormat: Optional[str] = None,
+        mode: Optional[str] = None,
+        columnNameOfCorruptRecord: Optional[str] = None,
+        multiLine: Optional[Union[bool, str]] = None,
+        samplingRatio: Optional[Union[float, str]] = None,
+        locale: Optional[str] = None,
+    ) -> "DataFrame":
+        self._set_opts(
+            rowTag=rowTag,
+            schema=schema,
+            excludeAttribute=excludeAttribute,
+            attributePrefix=attributePrefix,
+            valueTag=valueTag,
+            ignoreSurroundingSpaces=ignoreSurroundingSpaces,
+            rowValidationXSDPath=rowValidationXSDPath,
+            ignoreNamespace=ignoreNamespace,
+            wildcardColName=wildcardColName,
+            encoding=encoding,
+            inferSchema=inferSchema,
+            nullValue=nullValue,
+            dateFormat=dateFormat,
+            timestampFormat=timestampFormat,
+            mode=mode,
+            columnNameOfCorruptRecord=columnNameOfCorruptRecord,
+            multiLine=multiLine,
+            samplingRatio=samplingRatio,
+            locale=locale,
+        )
+        if isinstance(path, str):
+            return self.load(path=path, format="xml")
+        else:
+            raise PySparkTypeError(
+                error_class="NOT_STR",
+                message_parameters={"arg_name": "path", "arg_type": type(path).__name__},
+            )
+
+    xml.__doc__ = PySparkDataStreamReader.xml.__doc__
+
     def table(self, tableName: str) -> "DataFrame":
         return self._df(Read(tableName, self._options, is_streaming=True))
 
@@ -487,22 +542,34 @@ class DataStreamWriter:
         serializer = AutoBatchedSerializer(CPickleSerializer())
         command = (func, None, serializer, serializer)
         # Python ForeachWriter isn't really a PythonUDF. But we reuse it for simplicity.
-        self._write_proto.foreach_writer.python_writer.command = CloudPickleSerializer().dumps(
-            command
-        )
-        self._write_proto.foreach_writer.python_writer.python_ver = "%d.%d" % sys.version_info[:2]
+        try:
+            self._write_proto.foreach_writer.python_function.command = (
+                CloudPickleSerializer().dumps(command)
+            )
+        except pickle.PicklingError:
+            raise PySparkPicklingError(
+                error_class="STREAMING_CONNECT_SERIALIZATION_ERROR",
+                message_parameters={"name": "foreach"},
+            )
+        self._write_proto.foreach_writer.python_function.python_ver = "%d.%d" % sys.version_info[:2]
         return self
 
     foreach.__doc__ = PySparkDataStreamWriter.foreach.__doc__
 
-    # TODO (SPARK-42944): Implement and uncomment the doc
     def foreachBatch(self, func: Callable[["DataFrame", int], None]) -> "DataStreamWriter":
-        raise PySparkNotImplementedError(
-            error_class="NOT_IMPLEMENTED",
-            message_parameters={"feature": "foreachBatch()"},
-        )
+        try:
+            self._write_proto.foreach_batch.python_function.command = CloudPickleSerializer().dumps(
+                func
+            )
+        except pickle.PicklingError:
+            raise PySparkPicklingError(
+                error_class="STREAMING_CONNECT_SERIALIZATION_ERROR",
+                message_parameters={"name": "foreachBatch"},
+            )
+        self._write_proto.foreach_batch.python_function.python_ver = get_python_ver()
+        return self
 
-    # foreachBatch.__doc__ = PySparkDataStreamWriter.foreachBatch.__doc__
+    foreachBatch.__doc__ = PySparkDataStreamWriter.foreachBatch.__doc__
 
     def _start_internal(
         self,
@@ -534,12 +601,20 @@ class DataStreamWriter:
         start_result = cast(
             pb2.WriteStreamOperationStartResult, properties["write_stream_operation_start_result"]
         )
-        return StreamingQuery(
+        query = StreamingQuery(
             session=self._session,
             queryId=start_result.query_id.id,
             runId=start_result.query_id.run_id,
             name=start_result.name,
         )
+
+        if start_result.HasField("query_started_event_json"):
+            start_event = QueryStartedEvent.fromJson(
+                json.loads(start_result.query_started_event_json)
+            )
+            self._session.streams._sqlb.post_to_all(start_event)
+
+        return query
 
     def start(
         self,
@@ -585,6 +660,7 @@ class DataStreamWriter:
 
 
 def _test() -> None:
+    import os
     import sys
     import doctest
     from pyspark.sql import SparkSession as PySparkSession
@@ -594,7 +670,7 @@ def _test() -> None:
 
     globs["spark"] = (
         PySparkSession.builder.appName("sql.connect.streaming.readwriter tests")
-        .remote("local[4]")
+        .remote(os.environ.get("SPARK_CONNECT_TESTING_REMOTE", "local[4]"))
         .getOrCreate()
     )
 

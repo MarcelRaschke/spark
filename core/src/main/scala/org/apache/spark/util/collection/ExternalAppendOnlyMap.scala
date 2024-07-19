@@ -29,7 +29,8 @@ import com.google.common.io.ByteStreams
 import org.apache.spark.{SparkEnv, TaskContext}
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.executor.ShuffleWriteMetrics
-import org.apache.spark.internal.{config, Logging}
+import org.apache.spark.internal.{config, Logging, MDC}
+import org.apache.spark.internal.LogKeys._
 import org.apache.spark.serializer.{DeserializationStream, Serializer, SerializerManager}
 import org.apache.spark.storage.{BlockId, BlockManager}
 import org.apache.spark.util.CompletionIterator
@@ -362,7 +363,7 @@ class ExternalAppendOnlyMap[K, V, C](
     private def removeFromBuffer[T](buffer: ArrayBuffer[T], index: Int): T = {
       val elem = buffer(index)
       buffer(index) = buffer(buffer.size - 1)  // This also works if index == buffer.size - 1
-      buffer.trimEnd(1)
+      buffer.dropRightInPlace(1)
       elem
     }
 
@@ -544,7 +545,7 @@ class ExternalAppendOnlyMap[K, V, C](
       }
       if (file.exists()) {
         if (!file.delete()) {
-          logWarning(s"Error deleting ${file}")
+          logWarning(log"Error deleting ${MDC(FILE_NAME, file)}")
         }
       }
     }
@@ -565,8 +566,9 @@ class ExternalAppendOnlyMap[K, V, C](
       if (hasSpilled) {
         false
       } else {
-        logInfo(s"Task ${context.taskAttemptId} force spilling in-memory map to disk and " +
-          s"it will release ${org.apache.spark.util.Utils.bytesToString(getUsed())} memory")
+        logInfo(log"Task ${MDC(TASK_ATTEMPT_ID, context.taskAttemptId())} force spilling" +
+          log" in-memory map to disk and it will release " +
+          log"${MDC(NUM_BYTES, org.apache.spark.util.Utils.bytesToString(getUsed()))} memory")
         val nextUpstream = spillMemoryIteratorToDisk(upstream)
         assert(!upstream.hasNext)
         hasSpilled = true
@@ -581,7 +583,7 @@ class ExternalAppendOnlyMap[K, V, C](
     }
 
     def toCompletionIterator: CompletionIterator[(K, C), SpillableIterator] = {
-      CompletionIterator[(K, C), SpillableIterator](this, this.destroy)
+      CompletionIterator[(K, C), SpillableIterator](this, this.destroy())
     }
 
     def readNext(): (K, C) = SPILL_LOCK.synchronized {
@@ -592,7 +594,7 @@ class ExternalAppendOnlyMap[K, V, C](
       }
     }
 
-    override def hasNext(): Boolean = cur != null
+    override def hasNext: Boolean = cur != null
 
     override def next(): (K, C) = {
       val r = cur

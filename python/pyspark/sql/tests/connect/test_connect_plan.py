@@ -330,10 +330,23 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
             "id",
         )
 
-        from pyspark.sql.observation import Observation
+        from pyspark.sql.connect.observation import Observation
+
+        class MockDF(DataFrame):
+            def __new__(cls, df: DataFrame) -> "DataFrame":
+                self = object.__new__(cls)
+                self.__init__(df)  # type: ignore[misc]
+                return self
+
+            def __init__(self, df: DataFrame):
+                super().__init__(df._plan, df._session)
+
+            @property
+            def isStreaming(self) -> bool:
+                return False
 
         plan = (
-            df.filter(df.col_name > 3)
+            MockDF(df.filter(df.col_name > 3))
             .observe(Observation("my_metric"), min("id"), max("id"), sum("id"))
             ._plan.to_proto(self.connect)
         )
@@ -430,7 +443,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
         self.assertEqual(plan.root.sample.lower_bound, 0.0)
         self.assertEqual(plan.root.sample.upper_bound, 0.3)
         self.assertEqual(plan.root.sample.with_replacement, False)
-        self.assertEqual(plan.root.sample.HasField("seed"), False)
+        self.assertEqual(plan.root.sample.HasField("seed"), True)
         self.assertEqual(plan.root.sample.deterministic_order, False)
 
         plan = (
@@ -540,13 +553,25 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
         self.assertEqual(deduplicate_on_all_columns_plan.root.deduplicate.all_columns_as_keys, True)
         self.assertEqual(len(deduplicate_on_all_columns_plan.root.deduplicate.column_names), 0)
 
-        deduplicate_on_subset_columns_plan = df.dropDuplicates(["name", "height"])._plan.to_proto(
-            self.connect
+        deduplicate_on_subset_columns_plan_list_arg = df.dropDuplicates(
+            ["name", "height"]
+        )._plan.to_proto(self.connect)
+        self.assertEqual(
+            deduplicate_on_subset_columns_plan_list_arg.root.deduplicate.all_columns_as_keys, False
         )
         self.assertEqual(
-            deduplicate_on_subset_columns_plan.root.deduplicate.all_columns_as_keys, False
+            len(deduplicate_on_subset_columns_plan_list_arg.root.deduplicate.column_names), 2
         )
-        self.assertEqual(len(deduplicate_on_subset_columns_plan.root.deduplicate.column_names), 2)
+
+        deduplicate_on_subset_columns_plan_var_arg = df.dropDuplicates(
+            "name", "height"
+        )._plan.to_proto(self.connect)
+        self.assertEqual(
+            deduplicate_on_subset_columns_plan_var_arg.root.deduplicate.all_columns_as_keys, False
+        )
+        self.assertEqual(
+            len(deduplicate_on_subset_columns_plan_var_arg.root.deduplicate.column_names), 2
+        )
 
     def test_relation_alias(self):
         df = self.connect.readTable(table_name=self.tbl_name)
@@ -748,7 +773,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
         # SPARK-41717: test print
         self.assertEqual(
             self.connect.sql("SELECT 1")._plan.print().strip(),
-            "<SQL query='SELECT 1', args='None'>",
+            "<SQL query='SELECT 1', args='None', named_args='None', views='None'>",
         )
         self.assertEqual(
             self.connect.range(1, 10)._plan.print().strip(),
@@ -782,7 +807,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
     def test_join_with_join_type(self):
         df_left = self.connect.with_plan(Read("table"))
         df_right = self.connect.with_plan(Read("table"))
-        for (join_type_str, join_type) in [
+        for join_type_str, join_type in [
             (None, proto.Join.JoinType.JOIN_TYPE_INNER),
             ("inner", proto.Join.JoinType.JOIN_TYPE_INNER),
             ("outer", proto.Join.JoinType.JOIN_TYPE_FULL_OUTER),
@@ -844,7 +869,6 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
         self.assertEqual(bin_lit_p.literal.binary, val)
 
     def test_uuid_literal(self):
-
         val = uuid.uuid4()
         with self.assertRaises(TypeError):
             lit(val)

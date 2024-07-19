@@ -25,12 +25,8 @@ from typing import TYPE_CHECKING, Callable, Generic, List, Optional, Union
 from pyspark import StorageLevel
 from pyspark.sql import Column as PySparkColumn, DataFrame as PySparkDataFrame
 from pyspark.sql.types import DataType, StructType
-
 from pyspark.pandas._typing import IndexOpsLike
 from pyspark.pandas.internal import InternalField
-
-# For Supporting Spark Connect
-from pyspark.sql.utils import is_remote
 
 if TYPE_CHECKING:
     from pyspark.sql._typing import OptionalPrimitiveType
@@ -106,7 +102,7 @@ class SparkIndexOpsMethods(Generic[IndexOpsLike], metaclass=ABCMeta):
         Name: a, dtype: float64
 
         >>> df.index.spark.transform(lambda c: c + 10)
-        Int64Index([10, 11, 12], dtype='int64')
+        Index([10, 11, 12], dtype='int64')
 
         >>> df.a.spark.transform(lambda c: c + df.b.spark.column)
         0    5
@@ -119,13 +115,7 @@ class SparkIndexOpsMethods(Generic[IndexOpsLike], metaclass=ABCMeta):
         if isinstance(self._data, MultiIndex):
             raise NotImplementedError("MultiIndex does not support spark.transform yet.")
         output = func(self._data.spark.column)
-        if is_remote():
-            from pyspark.sql.connect.column import Column as ConnectColumn
-
-            Column = ConnectColumn
-        else:
-            Column = PySparkColumn  # type: ignore[assignment]
-        if not isinstance(output, Column):
+        if not isinstance(output, PySparkColumn):
             raise ValueError(
                 "The output of the function [%s] should be of a "
                 "pyspark.sql.Column; however, got [%s]." % (func, type(output))
@@ -200,13 +190,7 @@ class SparkSeriesMethods(SparkIndexOpsMethods["ps.Series"]):
         from pyspark.pandas.internal import HIDDEN_COLUMNS
 
         output = func(self._data.spark.column)
-        if is_remote():
-            from pyspark.sql.connect.column import Column as ConnectColumn
-
-            Column = ConnectColumn
-        else:
-            Column = PySparkColumn  # type: ignore[assignment]
-        if not isinstance(output, Column):
+        if not isinstance(output, PySparkColumn):
             raise ValueError(
                 "The output of the function [%s] should be of a "
                 "pyspark.sql.Column; however, got [%s]." % (func, type(output))
@@ -253,7 +237,8 @@ class SparkSeriesMethods(SparkIndexOpsMethods["ps.Series"]):
 
         However, it won't work with the same anchor Series.
 
-        >>> ser + ser.spark.analyzed
+        >>> with ps.option_context('compute.ops_on_diff_frames', False):
+        ...     ser + ser.spark.analyzed
         Traceback (most recent call last):
         ...
         ValueError: ... enable 'compute.ops_on_diff_frames' option.
@@ -291,25 +276,27 @@ class SparkIndexMethods(SparkIndexOpsMethods["ps.Index"]):
 
         Examples
         --------
+        >>> import pyspark.pandas as ps
         >>> idx = ps.Index([1, 2, 3])
         >>> idx
-        Int64Index([1, 2, 3], dtype='int64')
+        Index([1, 2, 3], dtype='int64')
 
         The analyzed one should return the same value.
 
         >>> idx.spark.analyzed
-        Int64Index([1, 2, 3], dtype='int64')
+        Index([1, 2, 3], dtype='int64')
 
         However, it won't work with the same anchor Index.
 
-        >>> idx + idx.spark.analyzed
+        >>> with ps.option_context('compute.ops_on_diff_frames', False):
+        ...     idx + idx.spark.analyzed
         Traceback (most recent call last):
         ...
         ValueError: ... enable 'compute.ops_on_diff_frames' option.
 
         >>> with ps.option_context('compute.ops_on_diff_frames', True):
         ...     (idx + idx.spark.analyzed).sort_values()
-        Int64Index([2, 4, 6], dtype='int64')
+        Index([2, 4, 6], dtype='int64')
         """
         from pyspark.pandas.frame import DataFrame
 
@@ -739,7 +726,6 @@ class SparkFrameMethods:
         See Also
         --------
         read_table
-        DataFrame.to_spark_io
         DataFrame.spark.to_spark_io
         DataFrame.to_parquet
 
@@ -773,8 +759,7 @@ class SparkFrameMethods:
         index_col: Optional[Union[str, List[str]]] = None,
         **options: "OptionalPrimitiveType",
     ) -> None:
-        """Write the DataFrame out to a Spark data source. :meth:`DataFrame.spark.to_spark_io`
-        is an alias of :meth:`DataFrame.to_spark_io`.
+        """Write the DataFrame out to a Spark data source.
 
         Parameters
         ----------
@@ -813,7 +798,6 @@ class SparkFrameMethods:
         DataFrame.to_delta
         DataFrame.to_parquet
         DataFrame.to_table
-        DataFrame.to_spark_io
         DataFrame.spark.to_spark_io
 
         Examples
@@ -828,7 +812,7 @@ class SparkFrameMethods:
         1 2012-02-29 12:00:00      US     2
         2 2012-03-31 12:00:00      JP     3
 
-        >>> df.to_spark_io(path='%s/to_spark_io/foo.json' % path, format='json')
+        >>> df.spark.to_spark_io(path='%s/to_spark_io/foo.json' % path, format='json')
         """
         if "options" in options and isinstance(options.get("options"), dict) and len(options) == 1:
             options = options.get("options")  # type: ignore[assignment]
@@ -951,13 +935,7 @@ class SparkFrameMethods:
         2  3      1
         """
         output = func(self.frame(index_col))
-        if is_remote():
-            from pyspark.sql.connect.dataframe import DataFrame as ConnectDataFrame
-
-            SparkDataFrame = ConnectDataFrame
-        else:
-            SparkDataFrame = PySparkDataFrame  # type: ignore[assignment]
-        if not isinstance(output, SparkDataFrame):
+        if not isinstance(output, PySparkDataFrame):
             raise ValueError(
                 "The output of the function [%s] should be of a "
                 "pyspark.sql.DataFrame; however, got [%s]." % (func, type(output))
@@ -1168,7 +1146,8 @@ class SparkFrameMethods:
 
         However, it won't work with the same anchor Series.
 
-        >>> df + df.spark.analyzed
+        >>> with ps.option_context('compute.ops_on_diff_frames', False):
+        ...     df + df.spark.analyzed
         Traceback (most recent call last):
         ...
         ValueError: ... enable 'compute.ops_on_diff_frames' option.

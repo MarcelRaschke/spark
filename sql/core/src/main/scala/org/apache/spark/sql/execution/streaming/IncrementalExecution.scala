@@ -20,21 +20,27 @@ package org.apache.spark.sql.execution.streaming
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
-import org.apache.spark.internal.Logging
+import org.apache.hadoop.fs.Path
+
+import org.apache.spark.internal.{Logging, MDC}
+import org.apache.spark.internal.LogKeys.{BATCH_TIMESTAMP, ERROR}
 import org.apache.spark.sql.{SparkSession, Strategy}
 import org.apache.spark.sql.catalyst.QueryPlanningTracker
 import org.apache.spark.sql.catalyst.expressions.{CurrentBatchTimestamp, ExpressionWithRandomSeed}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.trees.TreePattern._
-import org.apache.spark.sql.execution.{LocalLimitExec, QueryExecution, SparkPlan, SparkPlanner, UnaryExecNode}
+import org.apache.spark.sql.errors.QueryExecutionErrors
+import org.apache.spark.sql.execution.{LocalLimitExec, QueryExecution, SerializeFromObjectExec, SparkPlan, SparkPlanner, UnaryExecNode}
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, MergingSessionsExec, ObjectHashAggregateExec, SortAggregateExec, UpdatingSessionsExec}
+import org.apache.spark.sql.execution.datasources.v2.state.metadata.StateMetadataPartitionReader
 import org.apache.spark.sql.execution.exchange.ShuffleExchangeLike
 import org.apache.spark.sql.execution.python.FlatMapGroupsInPandasWithStateExec
 import org.apache.spark.sql.execution.streaming.sources.WriteToMicroBatchDataSourceV1
+import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadataV1, OperatorStateMetadataWriter}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.OutputMode
-import org.apache.spark.util.Utils
+import org.apache.spark.util.{SerializableConfiguration, Utils}
 
 /**
  * A variant of [[QueryExecution]] that allows the execution of the given [[LogicalPlan]]
@@ -50,7 +56,8 @@ class IncrementalExecution(
     val currentBatchId: Long,
     val prevOffsetSeqMetadata: Option[OffsetSeqMetadata],
     val offsetSeqMetadata: OffsetSeqMetadata,
-    val watermarkPropagator: WatermarkPropagator)
+    val watermarkPropagator: WatermarkPropagator,
+    val isFirstBatch: Boolean)
   extends QueryExecution(sparkSession, logicalPlan) with Logging {
 
   // Modified planner with stateful operations.
@@ -68,8 +75,11 @@ class IncrementalExecution(
       FlatMapGroupsInPandasWithStateStrategy ::
       StreamingRelationStrategy ::
       StreamingDeduplicationStrategy ::
-      StreamingGlobalLimitStrategy(outputMode) :: Nil
+      StreamingGlobalLimitStrategy(outputMode) ::
+      StreamingTransformWithStateStrategy :: Nil
   }
+
+  private lazy val hadoopConf = sparkSession.sessionState.newHadoopConf()
 
   private[sql] val numStateStores = offsetSeqMetadata.conf.get(SQLConf.SHUFFLE_PARTITIONS.key)
     .map(SQLConf.SHUFFLE_PARTITIONS.valueConverter)
@@ -92,7 +102,7 @@ class IncrementalExecution(
       tracker).transformAllExpressionsWithPruning(
       _.containsAnyPattern(CURRENT_LIKE, EXPRESSION_WITH_RANDOM_SEED)) {
       case ts @ CurrentBatchTimestamp(timestamp, _, _) =>
-        logInfo(s"Current batch timestamp = $timestamp")
+        logInfo(log"Current batch timestamp = ${MDC(BATCH_TIMESTAMP, timestamp)}")
         ts.toLiteral
       case e: ExpressionWithRandomSeed => e.withNewSeed(Utils.random.nextLong())
     }
@@ -177,12 +187,23 @@ class IncrementalExecution(
     }
   }
 
+  object WriteStatefulOperatorMetadataRule extends SparkPlanPartialRule {
+    override val rule: PartialFunction[SparkPlan, SparkPlan] = {
+      case stateStoreWriter: StateStoreWriter if isFirstBatch =>
+        val metadata = stateStoreWriter.operatorStateMetadata()
+        val metadataWriter = new OperatorStateMetadataWriter(new Path(
+          checkpointLocation, stateStoreWriter.getStateInfo.operatorId.toString), hadoopConf)
+        metadataWriter.write(metadata)
+        stateStoreWriter
+    }
+  }
+
   object StateOpIdRule extends SparkPlanPartialRule {
     override val rule: PartialFunction[SparkPlan, SparkPlan] = {
       case StateStoreSaveExec(keys, None, None, None, None, stateFormatVersion,
       UnaryExecNode(agg,
       StateStoreRestoreExec(_, None, _, child))) =>
-        val aggStateInfo = nextStatefulOperationStateInfo
+        val aggStateInfo = nextStatefulOperationStateInfo()
         StateStoreSaveExec(
           keys,
           Some(aggStateInfo),
@@ -201,7 +222,7 @@ class IncrementalExecution(
       stateFormatVersion,
       UnaryExecNode(agg,
       SessionWindowStateStoreRestoreExec(_, _, None, None, None, _, child))) =>
-        val aggStateInfo = nextStatefulOperationStateInfo
+        val aggStateInfo = nextStatefulOperationStateInfo()
         SessionWindowStateStoreSaveExec(
           keys,
           session,
@@ -224,7 +245,7 @@ class IncrementalExecution(
         StreamingDeduplicateExec(
           keys,
           child,
-          Some(nextStatefulOperationStateInfo),
+          Some(nextStatefulOperationStateInfo()),
           eventTimeWatermarkForLateEvents = None,
           eventTimeWatermarkForEviction = None)
 
@@ -232,7 +253,7 @@ class IncrementalExecution(
         StreamingDeduplicateWithinWatermarkExec(
           keys,
           child,
-          Some(nextStatefulOperationStateInfo),
+          Some(nextStatefulOperationStateInfo()),
           eventTimeWatermarkForLateEvents = None,
           eventTimeWatermarkForEviction = None)
 
@@ -240,7 +261,17 @@ class IncrementalExecution(
         // We set this to true only for the first batch of the streaming query.
         val hasInitialState = (currentBatchId == 0L && m.hasInitialState)
         m.copy(
-          stateInfo = Some(nextStatefulOperationStateInfo),
+          stateInfo = Some(nextStatefulOperationStateInfo()),
+          batchTimestampMs = Some(offsetSeqMetadata.batchTimestampMs),
+          eventTimeWatermarkForLateEvents = None,
+          eventTimeWatermarkForEviction = None,
+          hasInitialState = hasInitialState
+        )
+
+      case t: TransformWithStateExec =>
+        val hasInitialState = (currentBatchId == 0L && t.hasInitialState)
+        t.copy(
+          stateInfo = Some(nextStatefulOperationStateInfo()),
           batchTimestampMs = Some(offsetSeqMetadata.batchTimestampMs),
           eventTimeWatermarkForLateEvents = None,
           eventTimeWatermarkForEviction = None,
@@ -249,7 +280,7 @@ class IncrementalExecution(
 
       case m: FlatMapGroupsInPandasWithStateExec =>
         m.copy(
-          stateInfo = Some(nextStatefulOperationStateInfo),
+          stateInfo = Some(nextStatefulOperationStateInfo()),
           batchTimestampMs = Some(offsetSeqMetadata.batchTimestampMs),
           eventTimeWatermarkForLateEvents = None,
           eventTimeWatermarkForEviction = None
@@ -257,14 +288,14 @@ class IncrementalExecution(
 
       case j: StreamingSymmetricHashJoinExec =>
         j.copy(
-          stateInfo = Some(nextStatefulOperationStateInfo),
+          stateInfo = Some(nextStatefulOperationStateInfo()),
           eventTimeWatermarkForLateEvents = None,
           eventTimeWatermarkForEviction = None
         )
 
       case l: StreamingGlobalLimitExec =>
         l.copy(
-          stateInfo = Some(nextStatefulOperationStateInfo),
+          stateInfo = Some(nextStatefulOperationStateInfo()),
           outputMode = Some(outputMode))
     }
   }
@@ -316,6 +347,34 @@ class IncrementalExecution(
           eventTimeWatermarkForEviction = inputWatermarkForEviction(m.stateInfo.get)
         )
 
+      // UpdateEventTimeColumnExec is used to tag the eventTime column, and validate
+      // emitted rows adhere to watermark in the output of transformWithState.
+      // Hence, this node shares the same watermark value as TransformWithStateExec.
+      // However, given that UpdateEventTimeColumnExec does not store any state, it
+      // does not have any StateInfo. We simply use the StateInfo of transformWithStateExec
+      // to propagate watermark to both UpdateEventTimeColumnExec and transformWithStateExec.
+      case UpdateEventTimeColumnExec(eventTime, delay, None,
+        SerializeFromObjectExec(serializer,
+        t: TransformWithStateExec)) if t.stateInfo.isDefined =>
+
+        val stateInfo = t.stateInfo.get
+        val iwLateEvents = inputWatermarkForLateEvents(stateInfo)
+        val iwEviction = inputWatermarkForEviction(stateInfo)
+
+        UpdateEventTimeColumnExec(eventTime, delay, iwLateEvents,
+          SerializeFromObjectExec(serializer,
+            t.copy(
+              eventTimeWatermarkForLateEvents = iwLateEvents,
+              eventTimeWatermarkForEviction = iwEviction)
+          ))
+
+
+      case t: TransformWithStateExec if t.stateInfo.isDefined =>
+        t.copy(
+          eventTimeWatermarkForLateEvents = inputWatermarkForLateEvents(t.stateInfo.get),
+          eventTimeWatermarkForEviction = inputWatermarkForEviction(t.stateInfo.get)
+        )
+
       case m: FlatMapGroupsInPandasWithStateExec if m.stateInfo.isDefined =>
         m.copy(
           eventTimeWatermarkForLateEvents = inputWatermarkForLateEvents(m.stateInfo.get),
@@ -355,14 +414,75 @@ class IncrementalExecution(
       rulesToCompose.reduceLeft { (ruleA, ruleB) => ruleA orElse ruleB }
     }
 
+    private def checkOperatorValidWithMetadata(planWithStateOpId: SparkPlan): Unit = {
+      // get stateful operators for current batch
+      val opMapInPhysicalPlan: Map[Long, String] = planWithStateOpId.collect {
+        case stateStoreWriter: StateStoreWriter =>
+          stateStoreWriter.getStateInfo.operatorId -> stateStoreWriter.shortName
+      }.toMap
+
+      // A map of all (operatorId -> operatorName) in the state metadata
+      val opMapInMetadata: Map[Long, String] = {
+        var ret = Map.empty[Long, String]
+        val stateCheckpointLocation = new Path(checkpointLocation)
+
+        if (CheckpointFileManager.create(
+          stateCheckpointLocation, hadoopConf).exists(stateCheckpointLocation)) {
+          try {
+            val reader = new StateMetadataPartitionReader(
+              new Path(checkpointLocation).getParent.toString,
+              new SerializableConfiguration(hadoopConf))
+            val opMetadataList = reader.allOperatorStateMetadata
+            ret = opMetadataList.map { operatorMetadata =>
+              val metadataInfoV1 = operatorMetadata
+                .asInstanceOf[OperatorStateMetadataV1]
+                .operatorInfo
+              metadataInfoV1.operatorId -> metadataInfoV1.operatorName
+            }.toMap
+          } catch {
+            case e: Exception =>
+              // no need to throw fatal error, returns empty map
+              logWarning(log"Error reading metadata path for stateful operator. This may due to " +
+                log"no prior committed batch, or previously run on lower versions: " +
+                log"${MDC(ERROR, e.getMessage)}")
+          }
+        }
+        ret
+      }
+
+      // If state metadata is empty, skip the check
+      if (!opMapInMetadata.isEmpty) {
+        (opMapInMetadata.keySet ++ opMapInPhysicalPlan.keySet).foreach { opId =>
+          val opInMetadata = opMapInMetadata.getOrElse(opId, "not found")
+          val opInCurBatch = opMapInPhysicalPlan.getOrElse(opId, "not found")
+          if (opInMetadata != opInCurBatch) {
+            throw QueryExecutionErrors.statefulOperatorNotMatchInStateMetadataError(
+              opMapInMetadata,
+              opMapInPhysicalPlan)
+          }
+        }
+      }
+    }
+
     override def apply(plan: SparkPlan): SparkPlan = {
       val planWithStateOpId = plan transform composedRule
+      // Need to check before write to metadata because we need to detect add operator
+      // Only check when streaming is restarting and is first batch
+      if (isFirstBatch && currentBatchId != 0) {
+        checkOperatorValidWithMetadata(planWithStateOpId)
+      }
+      // The rule doesn't change the plan but cause the side effect that metadata is written
+      // in the checkpoint directory of stateful operator.
+      planWithStateOpId transform WriteStatefulOperatorMetadataRule.rule
       simulateWatermarkPropagation(planWithStateOpId)
       planWithStateOpId transform WatermarkPropagationRule.rule
     }
   }
 
   override def preparations: Seq[Rule[SparkPlan]] = state +: super.preparations
+
+  /** no need to try-catch again as this is already done once */
+  override def assertAnalyzed(): Unit = analyzed
 
   /** No need assert supported, as this check has already been done */
   override def assertSupported(): Unit = { }

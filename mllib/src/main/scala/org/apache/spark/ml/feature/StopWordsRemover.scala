@@ -20,6 +20,7 @@ package org.apache.spark.ml.feature
 import java.util.Locale
 
 import org.apache.spark.annotation.Since
+import org.apache.spark.internal.{LogKeys, MDC}
 import org.apache.spark.ml.Transformer
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared.{HasInputCol, HasInputCols, HasOutputCol, HasOutputCols}
@@ -28,6 +29,7 @@ import org.apache.spark.sql.{DataFrame, Dataset}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.functions.{col, udf}
 import org.apache.spark.sql.types.{ArrayType, StringType, StructField, StructType}
+import org.apache.spark.util.ArrayImplicits._
 
 /**
  * A feature transformer that filters out stop words from input.
@@ -128,9 +130,9 @@ class StopWordsRemover @Since("1.5.0") (@Since("1.5.0") override val uid: String
     if (Locale.getAvailableLocales.contains(Locale.getDefault)) {
       Locale.getDefault
     } else {
-      logWarning(s"Default locale set was [${Locale.getDefault.toString}]; however, it was " +
-        "not found in available locales in JVM, falling back to en_US locale. Set param `locale` " +
-        "in order to respect another locale.")
+      logWarning(log"Default locale set was [${MDC(LogKeys.LOCALE, Locale.getDefault)}]; " +
+        log"however, it was not found in available locales in JVM, falling back to en_US locale. " +
+        log"Set param `locale` in order to respect another locale.")
       Locale.US
     }
   }
@@ -171,7 +173,10 @@ class StopWordsRemover @Since("1.5.0") (@Since("1.5.0") override val uid: String
       t(col(inputColName))
     }
     val outputMetadata = outputColNames.map(outputSchema(_).metadata)
-    dataset.withColumns(outputColNames, outputCols, outputMetadata)
+    dataset.withColumns(
+      outputColNames.toImmutableArraySeq,
+      outputCols.toImmutableArraySeq,
+      outputMetadata.toImmutableArraySeq)
   }
 
   @Since("1.5.0")

@@ -61,13 +61,22 @@ ALTER TABLE test_change CHANGE a TYPE STRING
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_1245",
+  "errorClass" : "NOT_SUPPORTED_CHANGE_COLUMN",
+  "sqlState" : "0A000",
   "messageParameters" : {
-    "newName" : "a",
-    "newType" : "StringType",
-    "originName" : "a",
-    "originType" : "IntegerType"
-  }
+    "newName" : "`a`",
+    "newType" : "\"STRING\"",
+    "originName" : "`a`",
+    "originType" : "\"INT\"",
+    "table" : "`spark_catalog`.`default`.`test_change`"
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 1,
+    "stopIndex" : 44,
+    "fragment" : "ALTER TABLE test_change CHANGE a TYPE STRING"
+  } ]
 }
 
 
@@ -85,7 +94,7 @@ org.apache.spark.sql.AnalysisException
   "errorClass" : "UNSUPPORTED_FEATURE.TABLE_OPERATION",
   "sqlState" : "0A000",
   "messageParameters" : {
-    "operation" : "ALTER COLUMN ... FIRST | ALTER",
+    "operation" : "ALTER COLUMN ... FIRST | AFTER",
     "tableName" : "`spark_catalog`.`default`.`test_change`"
   }
 }
@@ -99,7 +108,7 @@ org.apache.spark.sql.AnalysisException
   "errorClass" : "UNSUPPORTED_FEATURE.TABLE_OPERATION",
   "sqlState" : "0A000",
   "messageParameters" : {
-    "operation" : "ALTER COLUMN ... FIRST | ALTER",
+    "operation" : "ALTER COLUMN ... FIRST | AFTER",
     "tableName" : "`spark_catalog`.`default`.`test_change`"
   }
 }
@@ -195,7 +204,7 @@ DescribeTableCommand `spark_catalog`.`default`.`test_change`, false, [col_name#x
 -- !query
 CREATE TEMPORARY VIEW temp_view(a, b) AS SELECT 1, "one"
 -- !query analysis
-CreateViewCommand `temp_view`, [(a,None), (b,None)], SELECT 1, "one", false, false, LocalTempView, true
+CreateViewCommand `temp_view`, [(a,None), (b,None)], SELECT 1, "one", false, false, LocalTempView, UNSUPPORTED, true
    +- Project [1 AS 1#x, one AS one#x]
       +- OneRowRelation
 
@@ -205,12 +214,11 @@ ALTER TABLE temp_view CHANGE a TYPE INT
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_1013",
+  "errorClass" : "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE",
+  "sqlState" : "42809",
   "messageParameters" : {
-    "cmd" : "ALTER TABLE ... CHANGE COLUMN",
-    "hintStr" : "",
-    "nameParts" : "temp_view",
-    "viewStr" : "temp view"
+    "operation" : "ALTER TABLE ... CHANGE COLUMN",
+    "viewName" : "`temp_view`"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -225,7 +233,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 CREATE GLOBAL TEMPORARY VIEW global_temp_view(a, b) AS SELECT 1, "one"
 -- !query analysis
-CreateViewCommand `global_temp_view`, [(a,None), (b,None)], SELECT 1, "one", false, false, GlobalTempView, true
+CreateViewCommand `global_temp_view`, [(a,None), (b,None)], SELECT 1, "one", false, false, GlobalTempView, UNSUPPORTED, true
    +- Project [1 AS 1#x, one AS one#x]
       +- OneRowRelation
 
@@ -235,12 +243,11 @@ ALTER TABLE global_temp.global_temp_view CHANGE a TYPE INT
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_1013",
+  "errorClass" : "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE",
+  "sqlState" : "42809",
   "messageParameters" : {
-    "cmd" : "ALTER TABLE ... CHANGE COLUMN",
-    "hintStr" : "",
-    "nameParts" : "global_temp.global_temp_view",
-    "viewStr" : "temp view"
+    "operation" : "ALTER TABLE ... CHANGE COLUMN",
+    "viewName" : "`global_temp`.`global_temp_view`"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -255,7 +262,8 @@ org.apache.spark.sql.AnalysisException
 -- !query
 DROP TABLE test_change
 -- !query analysis
-DropTableCommand `spark_catalog`.`default`.`test_change`, false, false, false
+DropTable false, false
++- ResolvedIdentifier V2SessionCatalog(spark_catalog), default.test_change
 
 
 -- !query

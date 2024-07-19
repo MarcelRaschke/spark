@@ -26,6 +26,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.{SharedSparkSession, SQLTestUtils}
 import org.apache.spark.sql.types.{IntegerType, StringType}
 import org.apache.spark.sql.util.QueryExecutionListener
+import org.apache.spark.tags.SlowSQLTest
 
 trait V1WriteCommandSuiteBase extends SQLTestUtils {
 
@@ -105,6 +106,7 @@ trait V1WriteCommandSuiteBase extends SQLTestUtils {
   }
 }
 
+@SlowSQLTest
 class V1WriteCommandSuite extends QueryTest with SharedSparkSession with V1WriteCommandSuiteBase {
 
   import testImplicits._
@@ -212,8 +214,8 @@ class V1WriteCommandSuite extends QueryTest with SharedSparkSession with V1Write
           val executedPlan = FileFormatWriter.executedPlan.get
 
           val plan = if (enabled) {
-            assert(executedPlan.isInstanceOf[WriteFilesExec])
-            executedPlan.asInstanceOf[WriteFilesExec].child
+            assert(executedPlan.isInstanceOf[WriteFilesExecBase])
+            executedPlan.asInstanceOf[WriteFilesExecBase].child
           } else {
             executedPlan.transformDown {
               case a: AdaptiveSparkPlanExec => a.executedPlan
@@ -259,8 +261,8 @@ class V1WriteCommandSuite extends QueryTest with SharedSparkSession with V1Write
         val executedPlan = FileFormatWriter.executedPlan.get
 
         val plan = if (enabled) {
-          assert(executedPlan.isInstanceOf[WriteFilesExec])
-          executedPlan.asInstanceOf[WriteFilesExec].child
+          assert(executedPlan.isInstanceOf[WriteFilesExecBase])
+          executedPlan.asInstanceOf[WriteFilesExecBase].child
         } else {
           executedPlan.transformDown {
             case a: AdaptiveSparkPlanExec => a.executedPlan

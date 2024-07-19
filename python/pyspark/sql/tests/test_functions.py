@@ -24,10 +24,9 @@ import math
 import re
 import unittest
 
-from py4j.protocol import Py4JJavaError
-
-from pyspark.errors import PySparkTypeError, PySparkValueError
+from pyspark.errors import PySparkTypeError, PySparkValueError, SparkRuntimeException
 from pyspark.sql import Row, Window, functions as F, types
+from pyspark.sql.avro.functions import from_avro, to_avro
 from pyspark.sql.column import Column
 from pyspark.testing.sqlutils import ReusedSQLTestCase, SQLTestUtils
 from pyspark.testing.utils import have_numpy
@@ -59,9 +58,14 @@ class FunctionsTestsMixin:
             "typedlit",  # Scala only
             "typedLit",  # Scala only
             "monotonicallyIncreasingId",  # depreciated, use monotonically_increasing_id
-            "negate",  # equivalent to python -expression
             "not",  # equivalent to python ~expression
+            "any",  # equivalent to python ~some
+            "len",  # equivalent to python ~length
             "udaf",  # used for creating UDAF's which are not supported in PySpark
+            "random",  # namespace conflict with python built-in module
+            "uuid",  # namespace conflict with python built-in module
+            "chr",  # namespace conflict with python built-in function
+            "partitioning$",  # partitioning expressions for DSv2
         ]
 
         jvm_fn_set.difference_update(jvm_excluded_fn)
@@ -185,7 +189,7 @@ class FunctionsTestsMixin:
                 "arg_name": "fractions",
                 "arg_type": "dict",
                 "allowed_types": "float, int, str",
-                "return_type": "NoneType",
+                "item_type": "NoneType",
             },
         )
 
@@ -341,7 +345,7 @@ class FunctionsTestsMixin:
 
         df = self.spark.createDataFrame([["nick"]], schema=["name"])
         with self.assertRaises(PySparkTypeError) as pe:
-            df.select(F.col("name").substr(0, F.lit(1)))
+            F.col("name").substr(0, F.lit(1))
 
         self.check_error(
             exception=pe.exception,
@@ -354,11 +358,28 @@ class FunctionsTestsMixin:
             },
         )
 
+        with self.assertRaises(PySparkTypeError) as pe:
+            F.col("name").substr("", "")
+
+        self.check_error(
+            exception=pe.exception,
+            error_class="NOT_COLUMN_OR_INT",
+            message_parameters={
+                "arg_name": "startPos",
+                "arg_type": "str",
+            },
+        )
+
         for name in string_functions:
             self.assertEqual(
                 df.select(getattr(F, name)("name")).first()[0],
                 df.select(getattr(F, name)(F.col("name"))).first()[0],
             )
+
+    def test_collation(self):
+        df = self.spark.createDataFrame([("a",), ("b",)], ["name"])
+        actual = df.select(F.collation(F.collate("name", "UNICODE"))).distinct().collect()
+        self.assertEqual([Row("UNICODE")], actual)
 
     def test_octet_length_function(self):
         # SPARK-36751: add octet length api for python
@@ -397,6 +418,18 @@ class FunctionsTestsMixin:
         df = self.spark.createDataFrame([Row(date=dt)])
         row = df.select(F.dayofweek(df.date)).first()
         self.assertEqual(row[0], 2)
+
+    def test_monthname(self):
+        dt = datetime.datetime(2017, 11, 6)
+        df = self.spark.createDataFrame([Row(date=dt)])
+        row = df.select(F.monthname(df.date)).first()
+        self.assertEqual(row[0], "Nov")
+
+    def test_dayname(self):
+        dt = datetime.datetime(2017, 11, 6)
+        df = self.spark.createDataFrame([Row(date=dt)])
+        row = df.select(F.dayname(df.date)).first()
+        self.assertEqual(row[0], "Mon")
 
     # Test added for SPARK-37738; change Python API to accept both col & int as input
     def test_date_add_function(self):
@@ -709,6 +742,52 @@ class FunctionsTestsMixin:
             message_parameters={"arg_name": "len", "arg_type": "float"},
         )
 
+    def test_percentile(self):
+        actual = list(
+            chain.from_iterable(
+                [
+                    re.findall("(percentile\\(.*\\))", str(x))
+                    for x in [
+                        F.percentile(F.col("foo"), F.lit(0.5)),
+                        F.percentile(F.col("bar"), 0.25, 2),
+                        F.percentile(F.col("bar"), [0.25, 0.5, 0.75]),
+                        F.percentile(F.col("foo"), (0.05, 0.95), 100),
+                        F.percentile("foo", 0.5),
+                        F.percentile("bar", [0.1, 0.9], F.lit(10)),
+                    ]
+                ]
+            )
+        )
+
+        expected = [
+            "percentile(foo, 0.5, 1)",
+            "percentile(bar, 0.25, 2)",
+            "percentile(bar, array(0.25, 0.5, 0.75), 1)",
+            "percentile(foo, array(0.05, 0.95), 100)",
+            "percentile(foo, 0.5, 1)",
+            "percentile(bar, array(0.1, 0.9), 10)",
+        ]
+
+        self.assertListEqual(actual, expected)
+
+    def test_median(self):
+        actual = list(
+            chain.from_iterable(
+                [
+                    re.findall("(median\\(.*\\))", str(x))
+                    for x in [
+                        F.median(F.col("foo")),
+                    ]
+                ]
+            )
+        )
+
+        expected = [
+            "median(foo)",
+        ]
+
+        self.assertListEqual(actual, expected)
+
     def test_percentile_approx(self):
         actual = list(
             chain.from_iterable(
@@ -851,7 +930,7 @@ class FunctionsTestsMixin:
             (3, "c"),
         ]
 
-        self.assertEquals(actual, expected)
+        self.assertEqual(actual, expected)
 
     def test_window_functions(self):
         df = self.spark.createDataFrame([(1, "1"), (2, "2"), (1, "2"), (1, "2")], ["key", "value"])
@@ -934,12 +1013,40 @@ class FunctionsTestsMixin:
         for r, ex in zip(rs, expected):
             self.assertEqual(tuple(r), ex[: len(r)])
 
+    def test_window_functions_moving_average(self):
+        data = [
+            (datetime.datetime(2023, 1, 1), 20),
+            (datetime.datetime(2023, 1, 2), 22),
+            (datetime.datetime(2023, 1, 3), 21),
+            (datetime.datetime(2023, 1, 4), 23),
+            (datetime.datetime(2023, 1, 5), 24),
+            (datetime.datetime(2023, 1, 6), 26),
+        ]
+        df = self.spark.createDataFrame(data, ["date", "temperature"])
+
+        def to_sec(i):
+            return i * 86400
+
+        w = Window.orderBy(F.col("date").cast("timestamp").cast("long")).rangeBetween(-to_sec(3), 0)
+        res = df.withColumn("3_day_avg_temp", F.avg("temperature").over(w))
+        rs = sorted(res.collect())
+        expected = [
+            (datetime.datetime(2023, 1, 1, 0, 0), 20, 20.0),
+            (datetime.datetime(2023, 1, 2, 0, 0), 22, 21.0),
+            (datetime.datetime(2023, 1, 3, 0, 0), 21, 21.0),
+            (datetime.datetime(2023, 1, 4, 0, 0), 23, 21.5),
+            (datetime.datetime(2023, 1, 5, 0, 0), 24, 22.5),
+            (datetime.datetime(2023, 1, 6, 0, 0), 26, 23.5),
+        ]
+        for r, ex in zip(rs, expected):
+            self.assertEqual(tuple(r), ex[: len(r)])
+
     def test_window_time(self):
         df = self.spark.createDataFrame(
             [(datetime.datetime(2016, 3, 11, 9, 0, 7), 1)], ["date", "val"]
         )
 
-        w = df.groupBy(F.window("date", "5 seconds")).agg(F.sum("val").alias("sum"))
+        w = df.groupBy(F.window("date", "5 seconds", "5 seconds")).agg(F.sum("val").alias("sum"))
         r = w.select(
             w.window.end.cast("string").alias("end"),
             F.window_time(w.window).cast("string").alias("window_time"),
@@ -970,7 +1077,7 @@ class FunctionsTestsMixin:
         self.assertEqual(datetime.date(2017, 1, 22), parse_result["to_date(dateCol)"])
 
     def test_assert_true(self):
-        self.check_assert_true(Py4JJavaError)
+        self.check_assert_true(SparkRuntimeException)
 
     def check_assert_true(self, tpe):
         df = self.spark.range(3)
@@ -980,10 +1087,10 @@ class FunctionsTestsMixin:
             [Row(val=None), Row(val=None), Row(val=None)],
         )
 
-        with self.assertRaisesRegex(tpe, "too big"):
+        with self.assertRaisesRegex(tpe, r"\[USER_RAISED_EXCEPTION\] too big"):
             df.select(F.assert_true(df.id < 2, "too big")).toDF("val").collect()
 
-        with self.assertRaisesRegex(tpe, "2000000"):
+        with self.assertRaisesRegex(tpe, r"\[USER_RAISED_EXCEPTION\] 2000000.0"):
             df.select(F.assert_true(df.id < 2, df.id * 1e6)).toDF("val").collect()
 
         with self.assertRaises(PySparkTypeError) as pe:
@@ -996,7 +1103,7 @@ class FunctionsTestsMixin:
         )
 
     def test_raise_error(self):
-        self.check_raise_error(Py4JJavaError)
+        self.check_raise_error(SparkRuntimeException)
 
     def check_raise_error(self, tpe):
         df = self.spark.createDataFrame([Row(id="foobar")])
@@ -1199,6 +1306,45 @@ class FunctionsTestsMixin:
         self.assertEqual({**expected, **expected2}, dict(actual["merged"]))
         self.assertEqual(expected, actual["from_items"])
 
+    def test_parse_json(self):
+        df = self.spark.createDataFrame([{"json": """{ "a" : 1 }"""}])
+        actual = df.select(
+            F.to_json(F.parse_json(df.json)).alias("var"),
+            F.to_json(F.parse_json(F.lit("""{"b": [{"c": "str2"}]}"""))).alias("var_lit"),
+        ).first()
+
+        self.assertEqual("""{"a":1}""", actual["var"])
+        self.assertEqual("""{"b":[{"c":"str2"}]}""", actual["var_lit"])
+
+    def test_variant_expressions(self):
+        df = self.spark.createDataFrame([Row(json="""{ "a" : 1 }"""), Row(json="""{ "b" : 2 }""")])
+        v = F.parse_json(df.json)
+
+        def check(resultDf, expected):
+            self.assertEqual([r[0] for r in resultDf.collect()], expected)
+
+        check(df.select(F.is_variant_null(v)), [False, False])
+        check(df.select(F.schema_of_variant(v)), ["STRUCT<a: BIGINT>", "STRUCT<b: BIGINT>"])
+        check(df.select(F.schema_of_variant_agg(v)), ["STRUCT<a: BIGINT, b: BIGINT>"])
+
+        check(df.select(F.variant_get(v, "$.a", "int")), [1, None])
+        check(df.select(F.variant_get(v, "$.b", "int")), [None, 2])
+        check(df.select(F.variant_get(v, "$.a", "double")), [1.0, None])
+
+        with self.assertRaises(SparkRuntimeException) as ex:
+            df.select(F.variant_get(v, "$.a", "binary")).collect()
+
+        self.check_error(
+            exception=ex.exception,
+            error_class="INVALID_VARIANT_CAST",
+            message_parameters={"value": "1", "dataType": '"BINARY"'},
+        )
+
+        check(df.select(F.try_variant_get(v, "$.a", "int")), [1, None])
+        check(df.select(F.try_variant_get(v, "$.b", "int")), [None, 2])
+        check(df.select(F.try_variant_get(v, "$.a", "double")), [1.0, None])
+        check(df.select(F.try_variant_get(v, "$.a", "binary")), [None, None])
+
     def test_schema_of_json(self):
         with self.assertRaises(PySparkTypeError) as pe:
             F.schema_of_json(1)
@@ -1208,6 +1354,14 @@ class FunctionsTestsMixin:
             error_class="NOT_COLUMN_OR_STR",
             message_parameters={"arg_name": "json", "arg_type": "int"},
         )
+
+    def test_try_parse_json(self):
+        df = self.spark.createDataFrame([{"json": """{ "a" : 1 }"""}, {"json": """{ a : 1 }"""}])
+        actual = df.select(
+            F.to_json(F.try_parse_json(df.json)).alias("var"),
+        ).collect()
+        self.assertEqual("""{"a":1}""", actual[0]["var"])
+        self.assertEqual(None, actual[1]["var"])
 
     def test_schema_of_csv(self):
         with self.assertRaises(PySparkTypeError) as pe:
@@ -1227,6 +1381,27 @@ class FunctionsTestsMixin:
         self.check_error(
             exception=pe.exception,
             error_class="NOT_COLUMN_OR_STR",
+            message_parameters={"arg_name": "schema", "arg_type": "int"},
+        )
+
+    def test_schema_of_xml(self):
+        with self.assertRaises(PySparkTypeError) as pe:
+            F.schema_of_xml(1)
+
+        self.check_error(
+            exception=pe.exception,
+            error_class="NOT_COLUMN_OR_STR",
+            message_parameters={"arg_name": "xml", "arg_type": "int"},
+        )
+
+    def test_from_xml(self):
+        df = self.spark.range(10)
+        with self.assertRaises(PySparkTypeError) as pe:
+            F.from_xml(df.id, 1)
+
+        self.check_error(
+            exception=pe.exception,
+            error_class="NOT_COLUMN_OR_STR_OR_STRUCT",
             message_parameters={"arg_name": "schema", "arg_type": "int"},
         )
 
@@ -1271,6 +1446,15 @@ class FunctionsTestsMixin:
             message_parameters={"arg_name": "gapDuration", "arg_type": "int"},
         )
 
+    def test_current_user(self):
+        df = self.spark.range(1).select(F.current_user())
+        self.assertIsInstance(df.first()[0], str)
+        self.assertEqual(df.schema.names[0], "current_user()")
+        df = self.spark.range(1).select(F.user())
+        self.assertEqual(df.schema.names[0], "user()")
+        df = self.spark.range(1).select(F.session_user())
+        self.assertEqual(df.schema.names[0], "session_user()")
+
     def test_bucket(self):
         with self.assertRaises(PySparkTypeError) as pe:
             F.bucket("5", "id")
@@ -1280,6 +1464,104 @@ class FunctionsTestsMixin:
             error_class="NOT_COLUMN_OR_INT",
             message_parameters={"arg_name": "numBuckets", "arg_type": "str"},
         )
+
+    def test_to_timestamp_ltz(self):
+        df = self.spark.createDataFrame([("2016-12-31",)], ["e"])
+        df = df.select(F.to_timestamp_ltz(df.e, F.lit("yyyy-MM-dd")).alias("r"))
+        self.assertIsInstance(df.first()[0], datetime.datetime)
+
+        df = self.spark.createDataFrame([("2016-12-31",)], ["e"])
+        df = df.select(F.to_timestamp_ltz(df.e).alias("r"))
+        self.assertIsInstance(df.first()[0], datetime.datetime)
+
+    def test_to_timestamp_ntz(self):
+        df = self.spark.createDataFrame([("2016-12-31",)], ["e"])
+        df = df.select(F.to_timestamp_ntz(df.e).alias("r"))
+        self.assertIsInstance(df.first()[0], datetime.datetime)
+
+    def test_convert_timezone(self):
+        df = self.spark.createDataFrame([("2015-04-08",)], ["dt"])
+        df = df.select(
+            F.convert_timezone(F.lit("America/Los_Angeles"), F.lit("Asia/Hong_Kong"), "dt")
+        )
+        self.assertIsInstance(df.first()[0], datetime.datetime)
+
+    def test_map_concat(self):
+        df = self.spark.sql("SELECT map(1, 'a', 2, 'b') as map1, map(3, 'c') as map2")
+        self.assertEqual(
+            df.select(F.map_concat(["map1", "map2"]).alias("map3")).first()[0],
+            {1: "a", 2: "b", 3: "c"},
+        )
+
+    def test_version(self):
+        self.assertIsInstance(self.spark.range(1).select(F.version()).first()[0], str)
+
+    # SPARK-45216: Fix non-deterministic seeded Dataset APIs
+    def test_non_deterministic_with_seed(self):
+        df = self.spark.createDataFrame([([*range(0, 10, 1)],)], ["a"])
+
+        r = F.rand()
+        r2 = F.randn()
+        r3 = F.shuffle("a")
+        res = df.select(r, r, r2, r2, r3, r3).collect()
+        for i in range(3):
+            self.assertEqual(res[0][i * 2], res[0][i * 2 + 1])
+
+    def test_current_timestamp(self):
+        df = self.spark.range(1).select(F.current_timestamp())
+        self.assertIsInstance(df.first()[0], datetime.datetime)
+        self.assertEqual(df.schema.names[0], "current_timestamp()")
+        df = self.spark.range(1).select(F.now())
+        self.assertIsInstance(df.first()[0], datetime.datetime)
+        self.assertEqual(df.schema.names[0], "now()")
+
+    def test_json_tuple_empty_fields(self):
+        df = self.spark.createDataFrame(
+            [
+                ("1", """{"f1": "value1", "f2": "value2"}"""),
+                ("2", """{"f1": "value12"}"""),
+            ],
+            ("key", "jstring"),
+        )
+        self.assertRaisesRegex(
+            PySparkValueError,
+            "At least one field must be specified",
+            lambda: df.select(F.json_tuple(df.jstring)),
+        )
+
+    def test_avro_type_check(self):
+        parameters = ["data", "jsonFormatSchema", "options"]
+        expected_type = ["pyspark.sql.Column or str", "str", "dict, optional"]
+        dummyDF = self.spark.createDataFrame([Row(a=i, b=i) for i in range(5)])
+
+        # test from_avro type checks for each parameter
+        wrong_type_value = 1
+        with self.assertRaises(PySparkTypeError) as pe1:
+            dummyDF.select(from_avro(wrong_type_value, "jsonSchema", None))
+        with self.assertRaises(PySparkTypeError) as pe2:
+            dummyDF.select(from_avro("value", wrong_type_value, None))
+        with self.assertRaises(PySparkTypeError) as pe3:
+            dummyDF.select(from_avro("value", "jsonSchema", wrong_type_value))
+        from_avro_pes = [pe1, pe2, pe3]
+        for i in range(3):
+            self.check_error(
+                exception=from_avro_pes[i].exception,
+                error_class="INVALID_TYPE",
+                message_parameters={"arg_name": parameters[i], "arg_type": expected_type[i]},
+            )
+
+        # test to_avro type checks for each parameter
+        with self.assertRaises(PySparkTypeError) as pe4:
+            dummyDF.select(to_avro(wrong_type_value, "jsonSchema"))
+        with self.assertRaises(PySparkTypeError) as pe5:
+            dummyDF.select(to_avro("value", wrong_type_value))
+        to_avro_pes = [pe4, pe5]
+        for i in range(2):
+            self.check_error(
+                exception=to_avro_pes[i].exception,
+                error_class="INVALID_TYPE",
+                message_parameters={"arg_name": parameters[i], "arg_type": expected_type[i]},
+            )
 
 
 class FunctionsTests(ReusedSQLTestCase, FunctionsTestsMixin):

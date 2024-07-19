@@ -16,22 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.computation.test_binary_ops import FrameBinaryOpsMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
-class FrameParityBinaryOpsTests(FrameBinaryOpsMixin, PandasOnSparkTestUtils, ReusedConnectTestCase):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip(
-        "TODO(SPARK-43616): Enable pyspark.pandas.spark.functions.repeat in Spark Connect."
-    )
-    def test_binary_operator_multiply(self):
-        super().test_binary_operator_multiply()
+class FrameParityBinaryOpsTests(
+    FrameBinaryOpsMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
+):
+    pass
 
 
 if __name__ == "__main__":
