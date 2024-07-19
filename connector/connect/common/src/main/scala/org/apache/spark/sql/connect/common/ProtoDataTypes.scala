@@ -19,7 +19,7 @@ package org.apache.spark.sql.connect.common
 
 import org.apache.spark.connect.proto
 
-private[connect] object ProtoDataTypes {
+private[sql] object ProtoDataTypes {
 
   val NullType: proto.DataType = proto.DataType
     .newBuilder()
@@ -102,5 +102,11 @@ private[connect] object ProtoDataTypes {
     proto.DataType
       .newBuilder()
       .setCalendarInterval(proto.DataType.CalendarInterval.getDefaultInstance)
+      .build()
+
+  val VariantType: proto.DataType =
+    proto.DataType
+      .newBuilder()
+      .setVariant(proto.DataType.Variant.getDefaultInstance)
       .build()
 }

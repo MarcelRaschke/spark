@@ -22,11 +22,6 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 
-from pyspark.sql import SparkSession
-from pyspark.sql.types import ArrayType, DoubleType, UserDefinedType, Row
-from pyspark.testing.utils import ReusedPySparkTestCase, PySparkErrorTestUtils
-
-
 pandas_requirement_message = None
 try:
     from pyspark.sql.pandas.utils import require_minimum_pandas_version
@@ -52,6 +47,11 @@ try:
     require_test_compiled()
 except Exception as e:
     test_not_compiled_message = str(e)
+
+from pyspark.sql import SparkSession
+from pyspark.sql.types import ArrayType, DoubleType, UserDefinedType, Row
+from pyspark.testing.utils import ReusedPySparkTestCase, PySparkErrorTestUtils
+
 
 have_pandas = pandas_requirement_message is None
 have_pyarrow = pyarrow_requirement_message is None
@@ -258,6 +258,7 @@ class ReusedSQLTestCase(ReusedPySparkTestCase, SQLTestUtils, PySparkErrorTestUti
     @classmethod
     def setUpClass(cls):
         super(ReusedSQLTestCase, cls).setUpClass()
+        cls._legacy_sc = cls.sc
         cls.spark = SparkSession(cls.sc)
         cls.tempdir = tempfile.NamedTemporaryFile(delete=False)
         os.unlink(cls.tempdir.name)

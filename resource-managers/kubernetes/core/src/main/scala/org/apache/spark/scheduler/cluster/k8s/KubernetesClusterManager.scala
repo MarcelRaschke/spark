@@ -25,7 +25,8 @@ import org.apache.spark.{SparkConf, SparkContext, SparkMasterRegex}
 import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesUtils, SparkKubernetesClientFactory}
 import org.apache.spark.deploy.k8s.Config._
 import org.apache.spark.deploy.k8s.Constants.DEFAULT_EXECUTOR_CONTAINER_NAME
-import org.apache.spark.internal.Logging
+import org.apache.spark.internal.{Logging, MDC}
+import org.apache.spark.internal.LogKeys.MASTER_URL
 import org.apache.spark.internal.config.TASK_MAX_FAILURES
 import org.apache.spark.scheduler.{ExternalClusterManager, SchedulerBackend, TaskScheduler, TaskSchedulerImpl}
 import org.apache.spark.scheduler.local.LocalSchedulerBackend
@@ -61,32 +62,30 @@ private[spark] class KubernetesClusterManager extends ExternalClusterManager wit
           if (threads == "*") localCpuCount else threads.toInt
         case _ => 1
       }
-      logInfo(s"Running Spark with ${sc.conf.get(KUBERNETES_DRIVER_MASTER_URL)}")
+      logInfo(log"Running Spark with ${MDC(MASTER_URL, sc.conf.get(KUBERNETES_DRIVER_MASTER_URL))}")
       val schedulerImpl = scheduler.asInstanceOf[TaskSchedulerImpl]
-      val backend = new LocalSchedulerBackend(sc.conf, schedulerImpl, threadCount)
+      // KubernetesClusterSchedulerBackend respects `spark.app.id` while LocalSchedulerBackend
+      // does not. Propagate `spark.app.id` via `spark.test.appId` to match the behavior.
+      val conf = sc.conf.getOption("spark.app.id").map(sc.conf.set("spark.test.appId", _))
+      val backend = new LocalSchedulerBackend(conf.getOrElse(sc.conf), schedulerImpl, threadCount)
       schedulerImpl.initialize(backend)
       return backend
     }
     val wasSparkSubmittedInClusterMode = sc.conf.get(KUBERNETES_DRIVER_SUBMIT_CHECK)
     val (authConfPrefix,
       apiServerUri,
-      defaultServiceAccountToken,
       defaultServiceAccountCaCrt) = if (wasSparkSubmittedInClusterMode) {
       require(sc.conf.get(KUBERNETES_DRIVER_POD_NAME).isDefined,
         "If the application is deployed using spark-submit in cluster mode, the driver pod name " +
           "must be provided.")
-      val serviceAccountToken =
-        Some(new File(Config.KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)).filter(_.exists)
       val serviceAccountCaCrt =
         Some(new File(Config.KUBERNETES_SERVICE_ACCOUNT_CA_CRT_PATH)).filter(_.exists)
       (KUBERNETES_AUTH_DRIVER_MOUNTED_CONF_PREFIX,
         sc.conf.get(KUBERNETES_DRIVER_MASTER_URL),
-        serviceAccountToken,
         serviceAccountCaCrt)
     } else {
       (KUBERNETES_AUTH_CLIENT_MODE_PREFIX,
         KubernetesUtils.parseMasterUrl(masterURL),
-        None,
         None)
     }
 
@@ -107,7 +106,6 @@ private[spark] class KubernetesClusterManager extends ExternalClusterManager wit
       authConfPrefix,
       SparkKubernetesClientFactory.ClientType.Driver,
       sc.conf,
-      defaultServiceAccountToken,
       defaultServiceAccountCaCrt)
 
     if (sc.conf.get(KUBERNETES_EXECUTOR_PODTEMPLATE_FILE).isDefined) {

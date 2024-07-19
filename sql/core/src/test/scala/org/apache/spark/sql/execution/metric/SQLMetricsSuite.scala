@@ -934,6 +934,31 @@ class SQLMetricsSuite extends SharedSparkSession with SQLMetricsTestUtils
     assert(windowGroupLimit.isDefined)
     assert(windowGroupLimit.get.metrics("numOutputRows").value == 2L)
   }
+
+  test("Creating metrics with initial values") {
+    assert(SQLMetrics.createSizeMetric(sparkContext, name = "m").value === 0)
+    assert(SQLMetrics.createSizeMetric(sparkContext, name = "m", initValue = -1).value === 0)
+
+    assert(SQLMetrics.createSizeMetric(sparkContext, name = "m").isZero)
+    assert(SQLMetrics.createSizeMetric(sparkContext, name = "m", initValue = -1).isZero)
+
+    assert(SQLMetrics.createTimingMetric(sparkContext, name = "m").value === 0)
+    assert(SQLMetrics.createTimingMetric(sparkContext, name = "m", initValue = -1).value === 0)
+
+    assert(SQLMetrics.createTimingMetric(sparkContext, name = "m").isZero)
+    assert(SQLMetrics.createTimingMetric(sparkContext, name = "m", initValue = -1).isZero)
+
+    assert(SQLMetrics.createNanoTimingMetric(sparkContext, name = "m").value === 0)
+    assert(SQLMetrics.createNanoTimingMetric(sparkContext, name = "m", initValue = -1).value === 0)
+
+    assert(SQLMetrics.createNanoTimingMetric(sparkContext, name = "m").isZero)
+    assert(SQLMetrics.createNanoTimingMetric(sparkContext, name = "m", initValue = -1).isZero)
+
+    // initValue must be <= 0
+    intercept[AssertionError] {
+      SQLMetrics.createNanoTimingMetric(sparkContext, name = "m", initValue = 5)
+    }
+  }
 }
 
 case class CustomFileCommitProtocol(

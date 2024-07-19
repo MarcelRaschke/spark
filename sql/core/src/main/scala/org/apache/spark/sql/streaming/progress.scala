@@ -21,7 +21,7 @@ import java.{util => ju}
 import java.lang.{Long => JLong}
 import java.util.UUID
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import com.fasterxml.jackson.databind.{DeserializationFeature, ObjectMapper}
@@ -165,6 +165,7 @@ class StreamingQueryProgress private[spark](
     ("name" -> JString(name)) ~
     ("timestamp" -> JString(timestamp)) ~
     ("batchId" -> JInt(batchId)) ~
+    ("batchDuration" -> JInt(batchDuration)) ~
     ("numInputRows" -> JInt(numInputRows)) ~
     ("inputRowsPerSecond" -> safeDoubleToJValue(inputRowsPerSecond)) ~
     ("processedRowsPerSecond" -> safeDoubleToJValue(processedRowsPerSecond)) ~
@@ -293,7 +294,7 @@ private object SafeJsonSerializer {
 
   /** Convert map to JValue while handling empty maps. Also, this sorts the keys. */
   def safeMapToJValue[T](map: ju.Map[String, T], valueToJValue: T => JValue): JValue = {
-    if (map.isEmpty) return JNothing
+    if (map == null || map.isEmpty) return JNothing
     val keys = map.asScala.keySet.toSeq.sorted
     keys.map { k => k -> valueToJValue(map.get(k)) : JObject }.reduce(_ ~ _)
   }

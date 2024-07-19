@@ -332,14 +332,14 @@ select date_add('2011-11-11', 1L)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"BIGINT\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_add(2011-11-11, 1)\""
   },
@@ -358,14 +358,14 @@ select date_add('2011-11-11', 1.0)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1.0\"",
     "inputType" : "\"DECIMAL(2,1)\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_add(2011-11-11, 1.0)\""
   },
@@ -384,14 +384,14 @@ select date_add('2011-11-11', 1E1)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"10.0\"",
     "inputType" : "\"DOUBLE\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_add(2011-11-11, 10.0)\""
   },
@@ -497,14 +497,14 @@ select date_sub('2011-11-11', 1L)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"BIGINT\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_sub(2011-11-11, 1)\""
   },
@@ -523,14 +523,14 @@ select date_sub('2011-11-11', 1.0)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1.0\"",
     "inputType" : "\"DECIMAL(2,1)\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_sub(2011-11-11, 1.0)\""
   },
@@ -549,14 +549,14 @@ select date_sub('2011-11-11', 1E1)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"10.0\"",
     "inputType" : "\"DOUBLE\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_sub(2011-11-11, 10.0)\""
   },
@@ -630,14 +630,14 @@ select date_add('2011-11-11', int_str) from date_view
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"int_str\"",
     "inputType" : "\"STRING\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_add(2011-11-11, int_str)\""
   },
@@ -656,14 +656,14 @@ select date_sub('2011-11-11', int_str) from date_view
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"int_str\"",
     "inputType" : "\"STRING\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_sub(2011-11-11, int_str)\""
   },
@@ -698,14 +698,14 @@ select date '2011-11-11' + 1E1
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"10.0\"",
     "inputType" : "\"DOUBLE\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_add(DATE '2011-11-11', 10.0)\""
   },
@@ -756,14 +756,14 @@ select date '2001-10-01' - '2001-09-28'
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"2001-09-28\"",
     "inputType" : "\"DOUBLE\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_sub(DATE '2001-10-01', 2001-09-28)\""
   },
@@ -814,14 +814,14 @@ select date '2001-09-28' - date_str from date_view
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"date_str\"",
     "inputType" : "\"DOUBLE\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_sub(DATE '2001-09-28', date_str)\""
   },
@@ -840,14 +840,14 @@ select date'2011-11-11' + '1'
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"DOUBLE\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_add(DATE '2011-11-11', 1)\""
   },
@@ -866,14 +866,14 @@ select '1' + date'2011-11-11'
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"1\"",
     "inputType" : "\"DOUBLE\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
     "sqlExpr" : "\"date_add(DATE '2011-11-11', 1)\""
   },

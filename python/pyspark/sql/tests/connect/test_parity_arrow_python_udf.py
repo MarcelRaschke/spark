@@ -15,8 +15,6 @@
 # limitations under the License.
 #
 
-import unittest
-
 from pyspark.sql.tests.connect.test_parity_udf import UDFParityTests
 from pyspark.sql.tests.test_arrow_python_udf import PythonUDFArrowTestsMixin
 

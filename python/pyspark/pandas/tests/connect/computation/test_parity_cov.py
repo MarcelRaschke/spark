@@ -16,22 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.computation.test_cov import FrameCovMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
-class FrameParityCovTests(FrameCovMixin, PandasOnSparkTestUtils, ReusedConnectTestCase):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip(
-        "TODO(SPARK-43613): Enable pyspark.pandas.spark.functions.covar in Spark Connect."
-    )
-    def test_cov(self):
-        super().test_cov()
+class FrameParityCovTests(
+    FrameCovMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
+):
+    pass
 
 
 if __name__ == "__main__":

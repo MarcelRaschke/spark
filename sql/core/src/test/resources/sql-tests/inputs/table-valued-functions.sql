@@ -31,6 +31,10 @@ select * from RaNgE(2);
 -- range call with alias
 select i from range(0, 2) t(i);
 
+-- range with non-foldable input
+select * from range(0, (select 1));
+select * from values (0, 1) t(c1, c2), lateral range(0, c2);
+
 -- explode
 select * from explode(array(1, 2));
 select * from explode(map('a', 1, 'b', 2));
@@ -42,6 +46,9 @@ select * from explode(map());
 -- explode with column aliases
 select * from explode(array(1, 2)) t(c1);
 select * from explode(map('a', 1, 'b', 2)) t(k, v);
+
+-- explode with non-deterministic values
+select * from explode(array(rand(0)));
 
 -- explode with erroneous input
 select * from explode(null);

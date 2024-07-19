@@ -14,16 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+
 from pyspark.sql.tests.pandas.test_pandas_map import MapInPandasTestsMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 
 
-class MapInPandasParityTests(MapInPandasTestsMixin, ReusedConnectTestCase):
-    def test_empty_dataframes_with_less_columns(self):
-        self.check_empty_dataframes_with_less_columns()
-
-    def test_other_than_dataframe(self):
-        self.check_other_than_dataframe()
+class MapInPandasParityTests(
+    MapInPandasTestsMixin,
+    ReusedConnectTestCase,
+):
+    pass
 
 
 if __name__ == "__main__":

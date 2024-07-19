@@ -19,8 +19,8 @@ package org.apache.spark.executor
 
 import java.util.concurrent.CopyOnWriteArrayList
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, LinkedHashMap}
+import scala.jdk.CollectionConverters._
 
 import org.apache.spark._
 import org.apache.spark.annotation.DeveloperApi
@@ -328,16 +328,19 @@ private[spark] object TaskMetrics extends Logging {
    */
   def fromAccumulators(accums: Seq[AccumulatorV2[_, _]]): TaskMetrics = {
     val tm = new TaskMetrics
+    val externalAccums = new java.util.ArrayList[AccumulatorV2[Any, Any]]()
     for (acc <- accums) {
       val name = acc.name
+      val tmpAcc = acc.asInstanceOf[AccumulatorV2[Any, Any]]
       if (name.isDefined && tm.nameToAccums.contains(name.get)) {
         val tmAcc = tm.nameToAccums(name.get).asInstanceOf[AccumulatorV2[Any, Any]]
         tmAcc.metadata = acc.metadata
-        tmAcc.merge(acc.asInstanceOf[AccumulatorV2[Any, Any]])
+        tmAcc.merge(tmpAcc)
       } else {
-        tm._externalAccums.add(acc)
+        externalAccums.add(tmpAcc)
       }
     }
+    tm._externalAccums.addAll(externalAccums)
     tm
   }
 }

@@ -151,11 +151,11 @@ class ExplainSuite extends ExplainSuiteHelper with DisableAdaptiveExecutionSuite
   }
 
   test("explain table valued functions") {
-    checkKeywordsExistsInExplain(sql("select * from RaNgE(2)"), "Range (0, 2, step=1, splits=None)")
+    checkKeywordsExistsInExplain(sql("select * from RaNgE(2)"), "Range (0, 2, step=1)")
     checkKeywordsExistsInExplain(sql("SELECT * FROM range(3) CROSS JOIN range(3)"),
       "Join Cross",
-      ":- Range (0, 3, step=1, splits=None)",
-      "+- Range (0, 3, step=1, splits=None)")
+      ":- Range (0, 3, step=1)",
+      "+- Range (0, 3, step=1)")
   }
 
   test("explain lateral joins") {
@@ -193,8 +193,8 @@ class ExplainSuite extends ExplainSuiteHelper with DisableAdaptiveExecutionSuite
         """.stripMargin)
       checkKeywordsExistsInExplain(df2,
         "Project [concat(cast(id#xL as string), cast((id#xL + 1) as string), " +
-          "cast(encode(cast((id#xL + 2) as string), utf-8) as string), " +
-          "cast(encode(cast((id#xL + 3) as string), utf-8) as string)) AS col#x]")
+          "cast(encode(cast((id#xL + 2) as string), utf-8, false) as string), " +
+          "cast(encode(cast((id#xL + 3) as string), utf-8, false) as string)) AS col#x]")
 
       val df3 = sql(
         """
@@ -209,8 +209,8 @@ class ExplainSuite extends ExplainSuiteHelper with DisableAdaptiveExecutionSuite
         """.stripMargin)
       checkKeywordsExistsInExplain(df3,
         "Project [concat(cast(id#xL as string), " +
-          "cast(encode(cast((id#xL + 2) as string), utf-8) as string), " +
-          "cast(encode(cast((id#xL + 3) as string), utf-8) as string)) AS col#x]")
+          "cast(encode(cast((id#xL + 2) as string), utf-8, false) as string), " +
+          "cast(encode(cast((id#xL + 3) as string), utf-8, false) as string)) AS col#x]")
     }
   }
 
@@ -423,7 +423,7 @@ class ExplainSuite extends ExplainSuiteHelper with DisableAdaptiveExecutionSuite
   }
 
   test("Dataset.toExplainString has mode as string") {
-    val df = spark.range(10).toDF
+    val df = spark.range(10).toDF()
     def assertExplainOutput(mode: ExplainMode): Unit = {
       assert(df.queryExecution.explainString(mode).replaceAll("#\\d+", "#x").trim ===
         getNormalizedExplain(df, mode).trim)
@@ -736,7 +736,7 @@ class ExplainSuiteAE extends ExplainSuiteHelper with EnableAdaptiveExecutionSuit
       val query = "SELECT * FROM (SELECT * FROM t1) join t2 " +
         "ON k = t2.key"
       val df = sql(query).toDF()
-
+      df.collect()
       val inMemoryRelationRegex = """InMemoryRelation \(([0-9]+)\)""".r
       val columnarToRowRegex = """ColumnarToRow \(([0-9]+)\)""".r
       val explainString = getNormalizedExplain(df, FormattedMode)

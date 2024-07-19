@@ -16,24 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.computation.test_apply_func import FrameApplyFunctionMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
 class FrameParityApplyFunctionTests(
-    FrameApplyFunctionMixin, PandasOnSparkTestUtils, ReusedConnectTestCase
+    FrameApplyFunctionMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
 ):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip(
-        "TODO(SPARK-43610): Enable `InternalFrame.attach_distributed_column` in Spark Connect."
-    )
-    def test_aggregate(self):
-        super().test_aggregate()
+    pass
 
 
 if __name__ == "__main__":

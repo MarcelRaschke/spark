@@ -20,14 +20,69 @@ package org.apache.spark.sql.errors
 import org.apache.spark.SparkThrowable
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.parser.ParseException
+import org.apache.spark.sql.catalyst.plans.SQLHelper
+import org.apache.spark.sql.catalyst.util.TypeUtils.toSQLId
 import org.apache.spark.sql.test.SharedSparkSession
 
 // Turn of the length check because most of the tests check entire error messages
 // scalastyle:off line.size.limit
-class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession {
+class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession with SQLHelper {
 
   private def parseException(sqlText: String): SparkThrowable = {
     intercept[ParseException](sql(sqlText).collect())
+  }
+
+  test("PARSE_STACK_OVERFLOW_ERROR: Stack overflow hit") {
+    val query = (1 to 20000).map(x => "SELECT 1 as a").mkString(" UNION ALL ")
+    val e = intercept[ParseException] {
+      spark.sql(query)
+    }
+    checkError(
+      exception = parseException(query),
+      errorClass = "FAILED_TO_PARSE_TOO_COMPLEX",
+      parameters = Map(),
+      context = ExpectedContext(
+        query,
+        start = 0,
+        stop = query.length - 1)
+    )
+  }
+
+  test("EXEC_IMMEDIATE_DUPLICATE_ARGUMENT_ALIASES: duplicate aliases provided in using statement") {
+    val query = "EXECUTE IMMEDIATE 'SELECT 1707 WHERE ? = 1' USING 1 as first" +
+      ", 2 as first, 3 as second, 4 as second, 5 as third"
+    checkError(
+      exception = parseException(query),
+      errorClass = "EXEC_IMMEDIATE_DUPLICATE_ARGUMENT_ALIASES",
+      parameters = Map("aliases" -> "`second`, `first`"),
+      context = ExpectedContext(
+        "USING 1 as first, 2 as first, 3 as second, 4 as second, 5 as third",
+        start = 44,
+        stop = 109)
+    )
+  }
+
+  test("PARSE_SYNTAX_ERROR: Execute immediate syntax error with INTO specified") {
+    val query = "EXECUTE IMMEDIATE 'SELCT 1707 WHERE ? = 1' INTO a USING 1"
+    checkError(
+      exception = parseException(query),
+      errorClass = "PARSE_SYNTAX_ERROR",
+      parameters = Map("error" -> "'SELCT'", "hint" -> ""),
+      context = ExpectedContext(
+        start = 0,
+        stop = 56,
+        fragment = query)
+    )
+  }
+
+  test("NAMED_PARAMETER_SUPPORT_DISABLED: named arguments not turned on") {
+    withSQLConf("spark.sql.allowNamedFunctionArguments" -> "false") {
+      checkError(
+        exception = parseException("SELECT explode(arr => array(10, 20))"),
+        errorClass = "NAMED_PARAMETER_SUPPORT_DISABLED",
+        parameters = Map("functionName"-> toSQLId("explode"), "argument" -> toSQLId("arr"))
+      )
+    }
   }
 
   test("UNSUPPORTED_FEATURE: LATERAL join with NATURAL join not supported") {
@@ -233,7 +288,7 @@ class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession {
         stop = 27))
   }
 
-  test("INVALID_SQL_SYNTAX.CREATE_FUNC_WITH_IF_NOT_EXISTS_AND_REPLACE: " +
+  test("INVALID_SQL_SYNTAX.CREATE_ROUTINE_WITH_IF_NOT_EXISTS_AND_REPLACE: " +
     "Create function with both if not exists and replace") {
     val sqlText =
       """CREATE OR REPLACE FUNCTION IF NOT EXISTS func1 as
@@ -242,7 +297,7 @@ class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession {
 
     checkError(
       exception = parseException(sqlText),
-      errorClass = "INVALID_SQL_SYNTAX.CREATE_FUNC_WITH_IF_NOT_EXISTS_AND_REPLACE",
+      errorClass = "INVALID_SQL_SYNTAX.CREATE_ROUTINE_WITH_IF_NOT_EXISTS_AND_REPLACE",
       sqlState = "42000",
       context = ExpectedContext(
         fragment = sqlText,
@@ -366,6 +421,24 @@ class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession {
       errorClass = "PARSE_SYNTAX_ERROR",
       sqlState = "42601",
       parameters = Map("error" -> "end of input", "hint" -> ""))
+  }
+
+  def checkParseSyntaxError(sqlCommand: String, errorString: String, hint: String = ""): Unit = {
+    checkError(
+      exception = parseException(sqlCommand),
+      errorClass = "PARSE_SYNTAX_ERROR",
+      sqlState = "42601",
+      parameters = Map("error" -> errorString, "hint" -> hint)
+    )
+  }
+
+  test("PARSE_SYNTAX_ERROR: named arguments invalid syntax") {
+    checkParseSyntaxError("select * from my_tvf(arg1 ==> 'value1')", "'>'")
+    checkParseSyntaxError("select * from my_tvf(arg1 = => 'value1')", "'=>'")
+    checkParseSyntaxError("select * from my_tvf((arg1 => 'value1'))", "'=>'")
+    checkParseSyntaxError("select * from my_tvf(arg1 => )", "')'")
+    checkParseSyntaxError("select * from my_tvf(arg1 => , 42)", "','")
+    checkParseSyntaxError("select * from my_tvf(my_tvf.arg1 => 'value1')", "'=>'")
   }
 
   test("PARSE_SYNTAX_ERROR: extraneous input") {
@@ -574,6 +647,13 @@ class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession {
       sqlState = "42K01",
       parameters = Map("elementType" -> "<INT>"),
       context = ExpectedContext(fragment = "ARRAY", start = 30, stop = 34))
+    // Create column of array type without specifying element type in lowercase
+    checkError(
+      exception = parseException("CREATE TABLE tbl_120691 (col1 array)"),
+      errorClass = "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+      sqlState = "42K01",
+      parameters = Map("elementType" -> "<INT>"),
+      context = ExpectedContext(fragment = "array", start = 30, stop = 34))
   }
 
   test("INCOMPLETE_TYPE_DEFINITION: struct type definition is incomplete") {
@@ -600,7 +680,13 @@ class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession {
       exception = parseException("SELECT CAST(struct(1,2,3) AS STRUCT<INT>)"),
       errorClass = "PARSE_SYNTAX_ERROR",
       sqlState = "42601",
-      parameters = Map("error" -> "'>'", "hint" -> ""))
+      parameters = Map("error" -> "'<'", "hint" -> ": missing ')'"))
+    // Create column of struct type without specifying field type in lowercase
+    checkError(
+      exception = parseException("CREATE TABLE tbl_120691 (col1 struct)"),
+      errorClass = "INCOMPLETE_TYPE_DEFINITION.STRUCT",
+      sqlState = "42K01",
+      context = ExpectedContext(fragment = "struct", start = 30, stop = 35))
   }
 
   test("INCOMPLETE_TYPE_DEFINITION: map type definition is incomplete") {
@@ -621,7 +707,13 @@ class QueryParsingErrorsSuite extends QueryTest with SharedSparkSession {
       exception = parseException("SELECT CAST(map('1',2) AS MAP<STRING>)"),
       errorClass = "PARSE_SYNTAX_ERROR",
       sqlState = "42601",
-      parameters = Map("error" -> "'>'", "hint" -> ""))
+      parameters = Map("error" -> "'<'", "hint" -> ": missing ')'"))
+    // Create column of map type without specifying key/value types in lowercase
+    checkError(
+      exception = parseException("SELECT CAST(map('1',2) AS map)"),
+      errorClass = "INCOMPLETE_TYPE_DEFINITION.MAP",
+      sqlState = "42K01",
+      context = ExpectedContext(fragment = "map", start = 26, stop = 28))
   }
 
   test("INVALID_ESC: Escape string must contain only one character") {

@@ -31,7 +31,7 @@ In this guide, we are going to walk you through the programming model and the AP
 
 # Quick Example
 Let’s say you want to maintain a running word count of text data received from a data server listening on a TCP socket. Let’s see how you can express this using Structured Streaming. You can see the full code in
-[Scala]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/scala/org/apache/spark/examples/sql/streaming/StructuredNetworkWordCount.scala)/[Java]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/java/org/apache/spark/examples/sql/streaming/JavaStructuredNetworkWordCount.java)/[Python]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/python/sql/streaming/structured_network_wordcount.py)/[R]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/r/streaming/structured_network_wordcount.R).
+[Python]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/python/sql/streaming/structured_network_wordcount.py)/[Scala]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/scala/org/apache/spark/examples/sql/streaming/StructuredNetworkWordCount.scala)/[Java]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/java/org/apache/spark/examples/sql/streaming/JavaStructuredNetworkWordCount.java)/[R]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/r/streaming/structured_network_wordcount.R).
 And if you [download Spark](https://spark.apache.org/downloads.html), you can directly [run the example](index.html#running-the-examples-and-shell). In any case, let’s walk through the example step-by-step and understand how it works. First, we have to import the necessary classes and create a local SparkSession, the starting point of all functionalities related to Spark.
 
 <div class="codetabs">
@@ -519,13 +519,13 @@ to track the read position in the stream. The engine uses checkpointing and writ
 
 # API using Datasets and DataFrames
 Since Spark 2.0, DataFrames and Datasets can represent static, bounded data, as well as streaming, unbounded data. Similar to static Datasets/DataFrames, you can use the common entry point `SparkSession`
-([Scala](api/scala/org/apache/spark/sql/SparkSession.html)/[Java](api/java/org/apache/spark/sql/SparkSession.html)/[Python](api/python/reference/pyspark.sql/api/pyspark.sql.SparkSession.html#pyspark.sql.SparkSession)/[R](api/R/reference/sparkR.session.html) docs)
+([Python](api/python/reference/pyspark.sql/api/pyspark.sql.SparkSession.html#pyspark.sql.SparkSession)/[Scala](api/scala/org/apache/spark/sql/SparkSession.html)/[Java](api/java/org/apache/spark/sql/SparkSession.html)/[R](api/R/reference/sparkR.session.html) docs)
 to create streaming DataFrames/Datasets from streaming sources, and apply the same operations on them as static DataFrames/Datasets. If you are not familiar with Datasets/DataFrames, you are strongly advised to familiarize yourself with them using the
 [DataFrame/Dataset Programming Guide](sql-programming-guide.html).
 
 ## Creating streaming DataFrames and streaming Datasets
 Streaming DataFrames can be created through the `DataStreamReader` interface
-([Scala](api/scala/org/apache/spark/sql/streaming/DataStreamReader.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamReader.html)/[Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamReader.html#pyspark.sql.streaming.DataStreamReader) docs)
+([Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamReader.html#pyspark.sql.streaming.DataStreamReader)/[Scala](api/scala/org/apache/spark/sql/streaming/DataStreamReader.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamReader.html) docs)
 returned by `SparkSession.readStream()`. In [R](api/R/reference/read.stream.html), with the `read.stream()` method. Similar to the read interface for creating static DataFrame, you can specify the details of the source – data format, schema, options, etc.
 
 #### Input Sources
@@ -545,7 +545,7 @@ checkpointed offsets after a failure. See the earlier section on
 [fault-tolerance semantics](#fault-tolerance-semantics).
 Here are the details of all the sources in Spark.
 
-<table class="table table-striped">
+<table>
   <thead>
   <tr>
     <th>Source</th>
@@ -561,6 +561,8 @@ Here are the details of all the sources in Spark.
         <br/>
         <code>maxFilesPerTrigger</code>: maximum number of new files to be considered in every trigger (default: no max)
         <br/>
+        <code>maxBytesPerTrigger</code>: maximum total size of new files to be considered in every trigger (default: no max). <code>maxBytesPerTrigger</code> and <code>maxFilesPerTrigger</code> can't both be set at the same time, only one of two must be chosen. Note that a stream always reads at least one file so it can make progress and not get stuck on a file larger than a given maximum.
+        <br/>
         <code>latestFirst</code>: whether to process the latest new files first, useful when there is a large backlog of files (default: false)
         <br/>
         <code>fileNameOnly</code>: whether to check new files based on only the filename instead of on the full path (default: false). With this set to `true`, the following files would be considered as the same file, because their filenames, "dataset.txt", are the same:
@@ -570,7 +572,11 @@ Here are the details of all the sources in Spark.
         "s3n://a/b/dataset.txt"<br/>
         "s3a://a/b/c/dataset.txt"
         <br/>
-        <code>maxFileAge</code>: Maximum age of a file that can be found in this directory, before it is ignored. For the first batch all files will be considered valid. If <code>latestFirst</code> is set to `true` and <code>maxFilesPerTrigger</code> is set, then this parameter will be ignored, because old files that are valid, and should be processed, may be ignored. The max age is specified with respect to the timestamp of the latest file, and not the timestamp of the current system.(default: 1 week)
+        <code>maxFileAge</code>: Maximum age of a file that can be found in this directory, before it is ignored. For the first batch all files will be considered valid. If <code>latestFirst</code> is set to `true` and <code>maxFilesPerTrigger</code> or <code>maxBytesPerTrigger</code> is set, then this parameter will be ignored, because old files that are valid, and should be processed, may be ignored. The max age is specified with respect to the timestamp of the latest file, and not the timestamp of the current system.(default: 1 week)
+        <br/>
+        <code>maxCachedFiles</code>: maximum number of files to cache to be processed in subsequent batches (default: 10000).  If files are available in the cache, they will be read from first before listing from the input source.
+        <br/>
+        <code>discardCachedInputRatio</code>: ratio of cached files/bytes to max files/bytes to allow for listing from input source when there is less cached input than could be available to be read (default: 0.2).  For example, if there are only 10 cached files remaining for a batch but the <code>maxFilesPerTrigger</code> is set to 100, the 10 cached files would be discarded and a new listing would be performed instead. Similarly, if there are cached files that are 10 MB remaining for a batch, but the <code>maxBytesPerTrigger</code> is set to 100MB, the cached files would be discarded.
         <br/>
         <code>cleanSource</code>: option to clean up completed files after processing.<br/>
         Available options are "archive", "delete", "off". If the option is not provided, the default value is "off".<br/>
@@ -583,7 +589,7 @@ Here are the details of all the sources in Spark.
         NOTE 3: Both delete and move actions are best effort. Failing to delete or move files will not fail the streaming query. Spark may not clean up some source files in some circumstances - e.g. the application doesn't shut down gracefully, too many files are queued to clean up.
         <br/><br/>
         For file-format-specific options, see the related methods in <code>DataStreamReader</code>
-        (<a href="api/scala/org/apache/spark/sql/streaming/DataStreamReader.html">Scala</a>/<a href="api/java/org/apache/spark/sql/streaming/DataStreamReader.html">Java</a>/<a href="api/python/reference/pyspark.sql/api/pyspark.sql.streaming.DataStreamReader.html#pyspark.sql.streaming.DataStreamReader">Python</a>/<a
+        (<a href="api/python/reference/pyspark.sql/api/pyspark.sql.streaming.DataStreamReader.html#pyspark.sql.streaming.DataStreamReader">Python</a>/<a href="api/scala/org/apache/spark/sql/streaming/DataStreamReader.html">Scala</a>/<a href="api/java/org/apache/spark/sql/streaming/DataStreamReader.html">Java</a>/<a
         href="api/R/read.stream.html">R</a>).
         E.g. for "parquet" format options see <code>DataStreamReader.parquet()</code>.
         <br/><br/>
@@ -930,7 +936,7 @@ The result tables would look something like the following.
 ![Window Operations](img/structured-streaming-window.png)
 
 Since this windowing is similar to grouping, in code, you can use `groupBy()` and `window()` operations to express windowed aggregations. You can see the full code for the below examples in
-[Scala]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/scala/org/apache/spark/examples/sql/streaming/StructuredNetworkWordCountWindowed.scala)/[Java]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/java/org/apache/spark/examples/sql/streaming/JavaStructuredNetworkWordCountWindowed.java)/[Python]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/python/sql/streaming/structured_network_wordcount_windowed.py).
+[Python]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/python/sql/streaming/structured_network_wordcount_windowed.py)/[Scala]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/scala/org/apache/spark/examples/sql/streaming/StructuredNetworkWordCountWindowed.scala)/[Java]({{site.SPARK_GITHUB_URL}}/blob/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/java/org/apache/spark/examples/sql/streaming/JavaStructuredNetworkWordCountWindowed.java).
 
 <div class="codetabs">
 
@@ -1215,12 +1221,12 @@ event start time and evaluated gap duration during the query execution.
 
 <div data-lang="python"  markdown="1">
 {% highlight python %}
-from pyspark.sql import functions as F
+from pyspark.sql import functions as sf
 
 events = ...  # streaming DataFrame of schema { timestamp: Timestamp, userId: String }
 
 session_window = session_window(events.timestamp, \
-    F.when(events.userId == "user1", "5 seconds") \
+    sf.when(events.userId == "user1", "5 seconds") \
     .when(events.userId == "user2", "20 seconds").otherwise("5 minutes"))
 
 # Group the data by session window and userId, and compute the count of each group
@@ -1819,7 +1825,7 @@ regarding watermark delays and whether data will be dropped or not.
 
 ##### Support matrix for joins in streaming queries
 
-<table class="table table-striped">
+<table>
 <thead>
   <tr>
     <th>Left Input</th>
@@ -1939,6 +1945,24 @@ In append output mode, you can construct a query having non-map-like operations 
 For example, here's an example of time window aggregation in both streams followed by stream-stream join with event time window:
 
 <div class="codetabs">
+<div data-lang="python"  markdown="1">
+
+{% highlight python %}
+clicksWindow = clicksWithWatermark.groupBy(
+  clicksWithWatermark.clickAdId,
+  window(clicksWithWatermark.clickTime, "1 hour")
+).count()
+
+impressionsWindow = impressionsWithWatermark.groupBy(
+  impressionsWithWatermark.impressionAdId,
+  window(impressionsWithWatermark.impressionTime, "1 hour")
+).count()
+
+clicksWindow.join(impressionsWindow, "window", "inner")
+
+{% endhighlight %}
+
+</div>
 <div data-lang="scala"  markdown="1">
 
 {% highlight scala %}
@@ -1974,29 +1998,32 @@ clicksWindow.join(impressionsWindow, "window", "inner");
 
 
 </div>
-<div data-lang="python"  markdown="1">
-
-{% highlight python %}
-clicksWindow = clicksWithWatermark.groupBy(
-  clicksWithWatermark.clickAdId,
-  window(clicksWithWatermark.clickTime, "1 hour")
-).count()
-
-impressionsWindow = impressionsWithWatermark.groupBy(
-  impressionsWithWatermark.impressionAdId,
-  window(impressionsWithWatermark.impressionTime, "1 hour")
-).count()
-
-clicksWindow.join(impressionsWindow, "window", "inner")
-
-{% endhighlight %}
-
-</div>
 </div>
 
 Here's another example of stream-stream join with time range join condition followed by time window aggregation:
 
 <div class="codetabs">
+<div data-lang="python"  markdown="1">
+
+{% highlight python %}
+joined = impressionsWithWatermark.join(
+  clicksWithWatermark,
+  expr("""
+    clickAdId = impressionAdId AND
+    clickTime >= impressionTime AND
+    clickTime <= impressionTime + interval 1 hour
+    """),
+  "leftOuter"                 # can be "inner", "leftOuter", "rightOuter", "fullOuter", "leftSemi"
+)
+
+joined.groupBy(
+  joined.clickAdId,
+  window(joined.clickTime, "1 hour")
+).count()
+
+{% endhighlight %}
+
+</div>
 <div data-lang="scala"  markdown="1">
 
 {% highlight scala %}
@@ -2036,27 +2063,6 @@ joined
 
 {% endhighlight %}
 
-
-</div>
-<div data-lang="python"  markdown="1">
-
-{% highlight python %}
-joined = impressionsWithWatermark.join(
-  clicksWithWatermark,
-  expr("""
-    clickAdId = impressionAdId AND
-    clickTime >= impressionTime AND
-    clickTime <= impressionTime + interval 1 hour
-    """),
-  "leftOuter"                 # can be "inner", "leftOuter", "rightOuter", "fullOuter", "leftSemi"
-)
-
-joined.groupBy(
-  joined.clickAdId,
-  window(joined.clickTime, "1 hour")
-).count()
-
-{% endhighlight %}
 
 </div>
 </div>
@@ -2307,7 +2313,7 @@ to `org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider`.
 
 Here are the configs regarding to RocksDB instance of the state store provider:
 
-<table class="table table-striped">
+<table>
   <thead>
   <tr>
     <th>Config Name</th>
@@ -2318,6 +2324,11 @@ Here are the configs regarding to RocksDB instance of the state store provider:
   <tr>
     <td>spark.sql.streaming.stateStore.rocksdb.compactOnCommit</td>
     <td>Whether we perform a range compaction of RocksDB instance for commit operation</td>
+    <td>False</td>
+  </tr>
+  <tr>
+    <td>spark.sql.streaming.stateStore.rocksdb.changelogCheckpointing.enabled</td>
+    <td>Whether to upload changelog instead of snapshot during RocksDB StateStore commit</td>
     <td>False</td>
   </tr>
   <tr>
@@ -2380,6 +2391,16 @@ Here are the configs regarding to RocksDB instance of the state store provider:
     <td>Total memory to be occupied by blocks in high priority pool as a fraction of memory allocated across all RocksDB instances on a single node using maxMemoryUsageMB.</td>
     <td>0.1</td>
   </tr>
+  <tr>
+    <td>spark.sql.streaming.stateStore.rocksdb.allowFAllocate</td>
+    <td>Allow the rocksdb runtime to use fallocate to pre-allocate disk space for logs, etc...  Disable for apps that have many smaller state stores to trade off disk space for write performance.</td>
+    <td>true</td>
+  </tr>
+  <tr>
+    <td>spark.sql.streaming.stateStore.rocksdb.compression</td>
+    <td>Compression type used in RocksDB. The string is converted RocksDB compression type through RocksDB Java API getCompressionType(). </td>
+    <td>lz4</td>
+  </tr>
 </table>
 
 ##### RocksDB State Store Memory Management
@@ -2388,6 +2409,23 @@ RocksDB provides a way to limit the memory usage for all DB instances running on
 If you want to cap RocksDB memory usage in your Spark Structured Streaming deployment, this feature can be enabled by setting the `spark.sql.streaming.stateStore.rocksdb.boundedMemoryUsage` config to `true`.
 You can also determine the max allowed memory for RocksDB instances by setting the `spark.sql.streaming.stateStore.rocksdb.maxMemoryUsageMB` value to a static number or as a fraction of the physical memory available on the node.
 Limits for individual RocksDB instances can also be configured by setting `spark.sql.streaming.stateStore.rocksdb.writeBufferSizeMB` and `spark.sql.streaming.stateStore.rocksdb.maxWriteBufferNumber` to the required values. By default, RocksDB internal defaults are used for these settings.
+
+Note that the `boundedMemoryUsage` config will enable a soft limit on the total memory usage for RocksDB.
+So the total memory used by RocksDB can temporarily exceed this value if all blocks allocated to higher level readers are in use.
+Enabling a strict limit is not possible at this time since it will cause query failures and we do not support re-balancing of the state across additional nodes.
+
+##### RocksDB State Store Changelog Checkpointing
+In newer version of Spark, changelog checkpointing is introduced for RocksDB state store. The traditional checkpointing mechanism for RocksDB State Store is incremental snapshot checkpointing, where the manifest files and newly generated RocksDB SST files of RocksDB instances are uploaded to a durable storage.
+Instead of uploading data files of RocksDB instances, changelog checkpointing uploads changes made to the state since the last checkpoint for durability.
+Snapshots are persisted periodically in the background for predictable failure recovery and changelog trimming.
+Changelog checkpointing avoids cost of capturing and uploading snapshots of RocksDB instances and significantly reduce streaming query latency.
+
+Changelog checkpointing is disabled by default. You can enable RocksDB State Store changelog checkpointing by setting `spark.sql.streaming.stateStore.rocksdb.changelogCheckpointing.enabled` config to `true`.
+Changelog checkpointing is designed to be backward compatible with traditional checkpointing mechanism.
+RocksDB state store provider offers seamless support for transitioning between two checkpointing mechanisms in both directions. This allows you to leverage the performance benefits of changelog checkpointing without discarding the old state checkpoint.
+In a version of spark that supports changelog checkpointing, you can migrate streaming queries from older versions of Spark to changelog checkpointing by enabling changelog checkpointing in the spark session.
+Vice versa, you can disable changelog checkpointing safely in newer version of Spark, then any query that already run with changelog checkpointing will switch back to traditional checkpointing.
+You would need to restart you streaming queries for change in checkpointing mechanism to be applied, but you won't observe any performance degrade in the process.
 
 ##### Performance-aspect considerations
 
@@ -2420,9 +2458,17 @@ Specifically for built-in HDFS state store provider, users can check the state s
 it is best if cache missing count is minimized that means Spark won't waste too much time on loading checkpointed state.
 User can increase Spark locality waiting configurations to avoid loading state store providers in different executors across batches.
 
+#### State Data Source (Experimental)
+
+Apache Spark provides a streaming state related data source that provides the ability to manipulate state stores in the checkpoint. Users can run the batch query with State Data Source to get the visibility of the states for existing streaming query.
+
+As of Spark 4.0, the data source only supports read feature. See [State Data Source Integration Guide](structured-streaming-state-data-source.html) for more details.
+
+NOTE: this data source is currently marked as experimental - source options and the behavior (output) might be subject to change.
+
 ## Starting Streaming Queries
 Once you have defined the final result DataFrame/Dataset, all that is left is for you to start the streaming computation. To do that, you have to use the `DataStreamWriter`
-([Scala](api/scala/org/apache/spark/sql/streaming/DataStreamWriter.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamWriter.html)/[Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamWriter.html#pyspark.sql.streaming.DataStreamWriter) docs)
+([Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamWriter.html#pyspark.sql.streaming.DataStreamWriter)/[Scala](api/scala/org/apache/spark/sql/streaming/DataStreamWriter.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamWriter.html) docs)
 returned through `Dataset.writeStream()`. You will have to specify one or more of the following in this interface.
 
 - *Details of the output sink:* Data format, location, etc.
@@ -2456,7 +2502,7 @@ More information to be added in future releases.
 Different types of streaming queries support different output modes.
 Here is the compatibility matrix.
 
-<table class="table table-striped">
+<table>
   <thead>
   <tr>
     <th>Query Type</th>
@@ -2595,7 +2641,7 @@ meant for debugging purposes only. See the earlier section on
 [fault-tolerance semantics](#fault-tolerance-semantics).
 Here are the details of all the sinks in Spark.
 
-<table class="table table-striped">
+<table>
   <thead>
   <tr>
     <th>Sink</th>
@@ -2616,7 +2662,7 @@ Here are the details of all the sinks in Spark.
         By default it's disabled.
         <br/><br/>
         For file-format-specific options, see the related methods in DataFrameWriter
-        (<a href="api/scala/org/apache/spark/sql/DataFrameWriter.html">Scala</a>/<a href="api/java/org/apache/spark/sql/DataFrameWriter.html">Java</a>/<a href="api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamWriter.html#pyspark.sql.streaming.DataStreamWriter">Python</a>/<a
+        (<a href="api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamWriter.html#pyspark.sql.streaming.DataStreamWriter">Python</a>/<a href="api/scala/org/apache/spark/sql/DataFrameWriter.html">Scala</a>/<a href="api/java/org/apache/spark/sql/DataFrameWriter.html">Java</a>/<a
         href="api/R/write.stream.html">R</a>).
         E.g. for "parquet" format options see <code>DataFrameWriter.parquet()</code>
     </td>
@@ -2927,7 +2973,11 @@ streamingDF.writeStream.foreachBatch { (batchDF: DataFrame, batchId: Long) =>
   batchId provided to the function as way to deduplicate the output and get an exactly-once guarantee.
 - `foreachBatch` does not work with the continuous processing mode as it fundamentally relies on the
   micro-batch execution of a streaming query. If you write data in the continuous mode, use `foreach` instead.
-
+- If `foreachBatch` is used with stateful streaming queries and multiple DataFrame actions are performed
+  on the same DataFrame (such as `df.count()` followed by `df.collect()`), the query will be evaluated multiple times leading to
+  the state being reloaded multiple times within the same batch resulting in degraded performance. In this case,
+  it's highly recommended for users to call `persist` and `unpersist` on the DataFrame,
+  within the `foreachBatch` UDF (user-defined function) to avoid recomputation.
 
 ###### Foreach
 If `foreachBatch` is not an option (for example, corresponding batch data writer does not exist, or
@@ -3176,14 +3226,14 @@ Not available in R.
 
 </div>
 
-For more details, please check the docs for DataStreamReader ([Scala](api/scala/org/apache/spark/sql/streaming/DataStreamReader.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamReader.html)/[Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamReader.html#pyspark.sql.streaming.DataStreamReader) docs) and DataStreamWriter ([Scala](api/scala/org/apache/spark/sql/streaming/DataStreamWriter.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamWriter.html)/[Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamWriter.html#pyspark.sql.streaming.DataStreamWriter) docs).
+For more details, please check the docs for DataStreamReader ([Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamReader.html#pyspark.sql.streaming.DataStreamReader)/[Scala](api/scala/org/apache/spark/sql/streaming/DataStreamReader.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamReader.html) docs) and DataStreamWriter ([Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.DataStreamWriter.html#pyspark.sql.streaming.DataStreamWriter)/[Scala](api/scala/org/apache/spark/sql/streaming/DataStreamWriter.html)/[Java](api/java/org/apache/spark/sql/streaming/DataStreamWriter.html) docs).
 
 #### Triggers
 The trigger settings of a streaming query define the timing of streaming data processing, whether
 the query is going to be executed as micro-batch query with a fixed batch interval or as a continuous processing query.
 Here are the different kinds of triggers that are supported.
 
-<table class="table table-striped">
+<table>
   <thead>
   <tr>
     <th>Trigger Type</th>
@@ -3232,8 +3282,8 @@ Here are the different kinds of triggers that are supported.
     <td>
         Similar to queries one-time micro-batch trigger, the query will process all the available data and then
         stop on its own. The difference is that, it will process the data in (possibly) multiple micro-batches
-        based on the source options (e.g. <code>maxFilesPerTrigger</code> for file source), which will result
-        in better query scalability.
+        based on the source options (e.g. <code>maxFilesPerTrigger</code> or <code>maxBytesPerTrigger</code> for file 
+        source), which will result in better query scalability.
         <ul>
             <li>This trigger provides a strong guarantee of processing: regardless of how many batches were
                 left over in previous run, it ensures all available data at the time of execution gets
@@ -3243,6 +3293,8 @@ Here are the different kinds of triggers that are supported.
                 if the last batch advances the watermark. This helps to maintain smaller and predictable
                 state size and smaller latency on the output of stateful operators.</li>
         </ul>
+        NOTE: this trigger will be deactivated when there is any source which does not support Trigger.AvailableNow.
+        Spark will perform one-time micro-batch as a fall-back. Check the above differences for a risk of fallback.
     </td>
   </tr>
   <tr>
@@ -3498,7 +3550,7 @@ lastProgress(query)       # the most recent progress update of this streaming qu
 </div>
 
 You can start any number of queries in a single SparkSession. They will all be running concurrently sharing the cluster resources. You can use `sparkSession.streams()` to get the `StreamingQueryManager`
-([Scala](api/scala/org/apache/spark/sql/streaming/StreamingQueryManager.html)/[Java](api/java/org/apache/spark/sql/streaming/StreamingQueryManager.html)/[Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.StreamingQueryManager.html#pyspark.sql.streaming.StreamingQueryManager) docs)
+([Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.StreamingQueryManager.html#pyspark.sql.streaming.StreamingQueryManager)/[Scala](api/scala/org/apache/spark/sql/streaming/StreamingQueryManager.html)/[Java](api/java/org/apache/spark/sql/streaming/StreamingQueryManager.html) docs)
 that can be used to manage the currently active queries.
 
 <div class="codetabs">
@@ -3797,7 +3849,7 @@ Will print something like the following.
 
 You can also asynchronously monitor all queries associated with a
 `SparkSession` by attaching a `StreamingQueryListener`
-([Scala](api/scala/org/apache/spark/sql/streaming/StreamingQueryListener.html)/[Java](api/java/org/apache/spark/sql/streaming/StreamingQueryListener.html)/[Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.StreamingQueryListener.html) docs).
+([Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.StreamingQueryListener.html)/[Scala](api/scala/org/apache/spark/sql/streaming/StreamingQueryListener.html)/[Java](api/java/org/apache/spark/sql/streaming/StreamingQueryListener.html) docs).
 Once you attach your custom `StreamingQueryListener` object with
 `sparkSession.streams.addListener()`, you will get callbacks when a query is started and
 stopped and when there is progress made in an active query. Here is an example,
@@ -3813,10 +3865,10 @@ class Listener(StreamingQueryListener):
         print("Query started: " + queryStarted.id)
 
     def onQueryProgress(self, event):
-        println("Query terminated: " + queryTerminated.id)
+        print("Query made progress: " + queryProgress.progress)
 
     def onQueryTerminated(self, event):
-        println("Query made progress: " + queryProgress.progress)
+    	print("Query terminated: " + queryTerminated.id)
 
 
 spark.streams.addListener(Listener())
@@ -4075,7 +4127,7 @@ The table below describes the configurations for this feature and default values
 | Option    | Value           | Default | Description       |
 |-------------|-----------------|------------|---------------------|
 |asyncProgressTrackingEnabled|true/false|false|enable or disable asynchronous progress tracking|
-|asyncProgressCheckpointingInterval|minutes|1|the interval in which we commit offsets and completion commits|
+|asyncProgressTrackingCheckpointIntervalMs|millisecond|1000|the interval in which we commit offsets and completion commits|
 
 ## Limitations
 The initial version of the feature has the following limitations:
@@ -4096,7 +4148,7 @@ Also the following error message may be printed in the driver logs:
 The offset log for batch x doesn't exist, which is required to restart the query from the latest batch x from the offset log. Please ensure there are two subsequent offset logs available for the latest batch via manually deleting the offset file(s). Please also ensure the latest batch for commit log is equal or one batch earlier than the latest batch for offset log.
 ```
 
-This is caused by the fact that when async progress tracking is enabled, the framework will not checkpoint progress for every batch as would be done if async progress tracking is not used. To solve this problem simply re-enable “asyncProgressTrackingEnabled” and set “asyncProgressCheckpointingInterval” to 0 and run the streaming query until at least two micro-batches have been processed. Async progress tracking can be now safely disabled and restarting query should proceed normally.
+This is caused by the fact that when async progress tracking is enabled, the framework will not checkpoint progress for every batch as would be done if async progress tracking is not used. To solve this problem simply re-enable “asyncProgressTrackingEnabled” and set “asyncProgressTrackingCheckpointIntervalMs” to 0 and run the streaming query until at least two micro-batches have been processed. Async progress tracking can be now safely disabled and restarting query should proceed normally.
 
 # Continuous Processing
 ## [Experimental]
@@ -4212,7 +4264,7 @@ See [Input Sources](#input-sources) and [Output Sinks](#output-sinks) sections f
 **Further Reading**
 
 - See and run the
-  [Scala]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/scala/org/apache/spark/examples/sql/streaming)/[Java]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/java/org/apache/spark/examples/sql/streaming)/[Python]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/python/sql/streaming)/[R]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/r/streaming)
+  [Python]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/python/sql/streaming)/[Scala]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/scala/org/apache/spark/examples/sql/streaming)/[Java]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/java/org/apache/spark/examples/sql/streaming)/[R]({{site.SPARK_GITHUB_URL}}/tree/v{{site.SPARK_VERSION_SHORT}}/examples/src/main/r/streaming)
   examples.
     - [Instructions](index.html#running-the-examples-and-shell) on how to run Spark examples
 - Read about integrating with Kafka in the [Structured Streaming Kafka Integration Guide](structured-streaming-kafka-integration.html)

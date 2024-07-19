@@ -17,11 +17,13 @@
 
 package org.apache.spark.sql.connect.common
 
-import scala.collection.convert.ImplicitConversions._
+import scala.jdk.CollectionConverters._
 
 import org.apache.spark.connect.proto
+import org.apache.spark.sql.catalyst.util.CollationFactory
 import org.apache.spark.sql.types._
-import org.apache.spark.util.Utils
+import org.apache.spark.util.ArrayImplicits._
+import org.apache.spark.util.SparkClassUtils
 
 /**
  * Helper class for conversions between [[DataType]] and [[proto.DataType]].
@@ -44,7 +46,7 @@ object DataTypeProtoConverter {
       case proto.DataType.KindCase.DOUBLE => DoubleType
       case proto.DataType.KindCase.DECIMAL => toCatalystDecimalType(t.getDecimal)
 
-      case proto.DataType.KindCase.STRING => StringType
+      case proto.DataType.KindCase.STRING => toCatalystStringType(t.getString)
       case proto.DataType.KindCase.CHAR => CharType(t.getChar.getLength)
       case proto.DataType.KindCase.VAR_CHAR => VarcharType(t.getVarChar.getLength)
 
@@ -61,6 +63,7 @@ object DataTypeProtoConverter {
       case proto.DataType.KindCase.ARRAY => toCatalystArrayType(t.getArray)
       case proto.DataType.KindCase.STRUCT => toCatalystStructType(t.getStruct)
       case proto.DataType.KindCase.MAP => toCatalystMapType(t.getMap)
+      case proto.DataType.KindCase.VARIANT => VariantType
 
       case proto.DataType.KindCase.UDT => toCatalystUDT(t.getUdt)
 
@@ -76,6 +79,9 @@ object DataTypeProtoConverter {
       case _ => new DecimalType()
     }
   }
+
+  private def toCatalystStringType(t: proto.DataType.String): StringType =
+    StringType(if (t.getCollation.nonEmpty) t.getCollation else "UTF8_BINARY")
 
   private def toCatalystYearMonthIntervalType(t: proto.DataType.YearMonthInterval) = {
     (t.hasStartField, t.hasEndField) match {
@@ -98,7 +104,7 @@ object DataTypeProtoConverter {
   }
 
   private def toCatalystStructType(t: proto.DataType.Struct): StructType = {
-    val fields = t.getFieldsList.toSeq.map { protoField =>
+    val fields = t.getFieldsList.asScala.toSeq.map { protoField =>
       val metadata = if (protoField.hasMetadata) {
         Metadata.fromJson(protoField.getMetadata)
       } else {
@@ -124,7 +130,7 @@ object DataTypeProtoConverter {
     }
 
     if (t.hasJvmClass) {
-      Utils
+      SparkClassUtils
         .classForName[UserDefinedType[_]](t.getJvmClass)
         .getConstructor()
         .newInstance()
@@ -169,7 +175,15 @@ object DataTypeProtoConverter {
             proto.DataType.Decimal.newBuilder().setPrecision(precision).setScale(scale).build())
           .build()
 
-      case StringType => ProtoDataTypes.StringType
+      case s: StringType =>
+        proto.DataType
+          .newBuilder()
+          .setString(
+            proto.DataType.String
+              .newBuilder()
+              .setCollation(CollationFactory.fetchCollation(s.collationId).collationName)
+              .build())
+          .build()
 
       case CharType(length) =>
         proto.DataType
@@ -225,7 +239,7 @@ object DataTypeProtoConverter {
           .build()
 
       case StructType(fields: Array[StructField]) =>
-        val protoFields = fields.toSeq.map {
+        val protoFields = fields.toImmutableArraySeq.map {
           case StructField(
                 name: String,
                 dataType: DataType,
@@ -253,7 +267,7 @@ object DataTypeProtoConverter {
           .setStruct(
             proto.DataType.Struct
               .newBuilder()
-              .addAllFields(protoFields)
+              .addAllFields(protoFields.asJava)
               .build())
           .build()
 
@@ -268,6 +282,8 @@ object DataTypeProtoConverter {
               .setValueContainsNull(valueContainsNull)
               .build())
           .build()
+
+      case VariantType => ProtoDataTypes.VariantType
 
       case pyudt: PythonUserDefinedType =>
         // Python UDT

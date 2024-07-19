@@ -26,6 +26,7 @@ package spark.connect;
 
 option java_multiple_files = true;
 option java_package = "org.apache.spark.connect.proto";
+option go_package = "internal/generated";
 
 // A [[Command]] is an operation that is executed by the server that does not directly consume or
 // produce a relational result.
@@ -40,6 +41,12 @@ message Command {
     StreamingQueryCommand streaming_query_command = 7;
     GetResourcesCommand get_resources_command = 8;
     StreamingQueryManagerCommand streaming_query_manager_command = 9;
+    CommonInlineUserDefinedTableFunction register_table_function = 10;
+    StreamingQueryListenerBusCommand streaming_query_listener_bus_command = 11;
+    CommonInlineUserDefinedDataSource register_data_source = 12;
+    CreateResourceProfileCommand create_resource_profile_command = 13;
+    CheckpointCommand checkpoint_command = 14;
+    RemoveCachedRemoteRelationCommand remove_cached_remote_relation_command = 15;
 
     // This field is used to mark extensions to the protocol. When plugins generate arbitrary
     // Commands they can add them here. During the planning the correct resolution is done.
@@ -56,10 +63,24 @@ message Command {
 // almost oblivious to the server-side behavior.
 message SqlCommand {
   // (Required) SQL Query.
-  string sql = 1;
+  string sql = 1 [deprecated=true];
 
   // (Optional) A map of parameter names to literal expressions.
-  map<string, Expression.Literal> args = 2;
+  map<string, Expression.Literal> args = 2 [deprecated=true];
+
+  // (Optional) A sequence of literal expressions for positional parameters in the SQL query text.
+  repeated Expression.Literal pos_args = 3 [deprecated=true];
+
+  // (Optional) A map of parameter names to expressions.
+  // It cannot coexist with `pos_arguments`.
+  map<string, Expression> named_arguments = 4 [deprecated=true];
+
+  // (Optional) A sequence of expressions for positional parameters in the SQL query text.
+  // It cannot coexist with `named_arguments`.
+  repeated Expression pos_arguments = 5 [deprecated=true];
+
+  // (Optional) The relation that this SQL command will be built on.
+  Relation input = 6;
 }
 
 // A command that can create DataFrame global temp view or local temp view.
@@ -113,6 +134,9 @@ message WriteOperation {
 
   // (Optional) A list of configuration options.
   map<string, string> options = 9;
+
+  // (Optional) Columns used for clustering the table.
+  repeated string clustering_columns = 10;
 
   message SaveTable {
     // (Required) The table name.
@@ -178,6 +202,9 @@ message WriteOperationV2 {
 
   // (Optional) A condition for overwrite saving mode
   Expression overwrite_condition = 8;
+
+  // (Optional) Columns used for clustering the table.
+  repeated string clustering_columns = 9;
 }
 
 // Starts write stream operation as streaming query. Query ID and Run ID of the streaming
@@ -210,12 +237,14 @@ message WriteStreamOperationStart {
     string table_name = 12;
   }
 
-  StreamingForeachWriter foreach_writer = 13;
+  StreamingForeachFunction foreach_writer = 13;
+  StreamingForeachFunction foreach_batch = 14;
 }
 
-message StreamingForeachWriter {
-  oneof writer {
-    PythonUDF python_writer = 1;
+message StreamingForeachFunction {
+  oneof function {
+    PythonUDF python_function = 1;
+    ScalarScalaUDF scala_function = 2;
   }
 }
 
@@ -226,6 +255,9 @@ message WriteStreamOperationStartResult {
 
   // An optional query name.
   string name = 2;
+
+  // Optional query started event if there is any listener registered on the client side.
+  optional string query_started_event_json = 3;
 
   // TODO: How do we indicate errors?
   // TODO: Consider adding status, last progress etc here.
@@ -343,11 +375,23 @@ message StreamingQueryManagerCommand {
     AwaitAnyTerminationCommand await_any_termination = 3;
     // resetTerminated() API.
     bool reset_terminated = 4;
+    // addListener API.
+    StreamingQueryListenerCommand add_listener = 5;
+    // removeListener API.
+    StreamingQueryListenerCommand remove_listener = 6;
+    // listListeners() API, returns a list of streaming query listeners.
+    bool list_listeners = 7;
   }
 
   message AwaitAnyTerminationCommand {
     // (Optional) The waiting time in milliseconds to wait for any query to terminate.
     optional int64 timeout_ms = 1;
+  }
+
+  message StreamingQueryListenerCommand {
+    bytes listener_payload = 1;
+    optional PythonUDF python_listener_payload = 2;
+    string id = 3;
   }
 }
 
@@ -358,6 +402,9 @@ message StreamingQueryManagerCommandResult {
     StreamingQueryInstance query = 2;
     AwaitAnyTerminationResult await_any_termination = 3;
     bool reset_terminated = 4;
+    bool add_listener = 5;
+    bool remove_listener = 6;
+    ListStreamingQueryListenerResult list_listeners = 7;
   }
 
   message ActiveResult {
@@ -374,6 +421,50 @@ message StreamingQueryManagerCommandResult {
   message AwaitAnyTerminationResult {
     bool terminated = 1;
   }
+
+  message StreamingQueryListenerInstance {
+    bytes listener_payload = 1;
+  }
+
+  message ListStreamingQueryListenerResult {
+    // (Required) Reference IDs of listener instances.
+    repeated string listener_ids = 1;
+  }
+}
+
+// The protocol for client-side StreamingQueryListener.
+// This command will only be set when either the first listener is added to the client, or the last
+// listener is removed from the client.
+// The add_listener_bus_listener command will only be set true in the first case.
+// The remove_listener_bus_listener command will only be set true in the second case.
+message StreamingQueryListenerBusCommand {
+  oneof command {
+    bool add_listener_bus_listener = 1;
+    bool remove_listener_bus_listener = 2;
+  }
+}
+
+// The enum used for client side streaming query listener event
+// There is no QueryStartedEvent defined here,
+// it is added as a field in WriteStreamOperationStartResult
+enum StreamingQueryEventType {
+  QUERY_PROGRESS_UNSPECIFIED = 0;
+  QUERY_PROGRESS_EVENT = 1;
+  QUERY_TERMINATED_EVENT = 2;
+  QUERY_IDLE_EVENT = 3;
+}
+
+// The protocol for the returned events in the long-running response channel.
+message StreamingQueryListenerEvent {
+  // (Required) The json serialized event, all StreamingQueryListener events have a json method
+  string event_json = 1;
+  // (Required) Query event type used by client to decide how to deserialize the event_json
+  StreamingQueryEventType event_type = 2;
+}
+
+message StreamingQueryListenerEventsResult {
+  repeated StreamingQueryListenerEvent events = 1;
+  optional bool listener_bus_listener_added = 2;
 }
 
 // Command to get the output of 'SparkContext.resources'
@@ -382,4 +473,34 @@ message GetResourcesCommand { }
 // Response for command 'GetResourcesCommand'.
 message GetResourcesCommandResult {
   map<string, ResourceInformation> resources = 1;
+}
+
+// Command to create ResourceProfile
+message CreateResourceProfileCommand {
+  // (Required) The ResourceProfile to be built on the server-side.
+  ResourceProfile profile = 1;
+}
+
+// Response for command 'CreateResourceProfileCommand'.
+message CreateResourceProfileCommandResult {
+  // (Required) Server-side generated resource profile id.
+  int32 profile_id = 1;
+}
+
+// Command to remove `CashedRemoteRelation`
+message RemoveCachedRemoteRelationCommand {
+  // (Required) The remote to be related
+  CachedRemoteRelation relation = 1;
+}
+
+message CheckpointCommand {
+  // (Required) The logical plan to checkpoint.
+  Relation relation = 1;
+
+  // (Required) Locally checkpoint using a local temporary
+  // directory in Spark Connect server (Spark Driver)
+  bool local = 2;
+
+  // (Required) Whether to checkpoint this dataframe immediately.
+  bool eager = 3;
 }

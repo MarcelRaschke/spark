@@ -6,7 +6,7 @@ AS t1(t1a, t1b, t1c)
 -- !query analysis
 CreateViewCommand `t1`, SELECT * FROM VALUES
   (1, 2, 3)
-AS t1(t1a, t1b, t1c), false, false, LocalTempView, true
+AS t1(t1a, t1b, t1c), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [t1a#x, t1b#x, t1c#x]
       +- SubqueryAlias t1
          +- LocalRelation [t1a#x, t1b#x, t1c#x]
@@ -19,7 +19,7 @@ AS t2(t2a, t2b, t2c)
 -- !query analysis
 CreateViewCommand `t2`, SELECT * FROM VALUES
   (1, 0, 1)
-AS t2(t2a, t2b, t2c), false, false, LocalTempView, true
+AS t2(t2a, t2b, t2c), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [t2a#x, t2b#x, t2c#x]
       +- SubqueryAlias t2
          +- LocalRelation [t2a#x, t2b#x, t2c#x]
@@ -32,7 +32,7 @@ AS t3(t3a, t3b, t3c)
 -- !query analysis
 CreateViewCommand `t3`, SELECT * FROM VALUES
   (3, 1, 2)
-AS t3(t3a, t3b, t3c), false, false, LocalTempView, true
+AS t3(t3a, t3b, t3c), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [t3a#x, t3b#x, t3c#x]
       +- SubqueryAlias t3
          +- LocalRelation [t3a#x, t3b#x, t3c#x]
@@ -49,7 +49,7 @@ AND    t2b = (SELECT max(avg)
                      )
              )
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "MISSING_GROUP_BY",
   "sqlState" : "42803",
@@ -74,11 +74,14 @@ WHERE  t1a IN (SELECT   min(t2a)
                                 GROUP BY t3b
                                 HAVING   t3b > t2b ))
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2432",
+  "errorClass" : "MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT",
+  "sqlState" : "XX000",
   "messageParameters" : {
-    "msg" : "Resolved attribute(s) t2b#x missing from min(t2a)#x,t2c#x in operator !Filter t2c#x IN (list#x [t2b#x])."
+    "input" : "\"min(t2a)\", \"t2c\"",
+    "missingAttributes" : "\"t2b\"",
+    "operator" : "!Filter t2c#x IN (list#x [t2b#x])"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -151,7 +154,7 @@ WHERE  t1a IN (SELECT t2a
                WHERE  EXISTS (SELECT min(t2a) 
                               FROM   t3))
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
   "sqlState" : "0A000",
@@ -175,7 +178,7 @@ AS t1(t1a, t1b, t1c)
 -- !query analysis
 CreateViewCommand `t1_copy`, SELECT * FROM VALUES
   (1, 2, 3)
-AS t1(t1a, t1b, t1c), false, false, LocalTempView, true
+AS t1(t1a, t1b, t1c), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [t1a#x, t1b#x, t1c#x]
       +- SubqueryAlias t1
          +- LocalRelation [t1a#x, t1b#x, t1c#x]
@@ -187,7 +190,7 @@ FROM   t1
 JOIN   t1_copy
 ON     EXISTS (SELECT 1 FROM t2 WHERE t2a > t1a)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "UNRESOLVED_COLUMN.WITH_SUGGESTION",
   "sqlState" : "42703",

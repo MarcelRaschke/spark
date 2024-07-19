@@ -43,12 +43,15 @@ import org.apache.spark.sql.streaming.OutputMode._
 import org.apache.spark.sql.streaming.util.{MockSourceProvider, StreamManualClock}
 import org.apache.spark.sql.types.{StructType, TimestampType}
 import org.apache.spark.storage.{BlockId, StorageLevel, TestBlockId}
+import org.apache.spark.tags.SlowSQLTest
+import org.apache.spark.util.ArrayImplicits._
 import org.apache.spark.util.Utils
 
 object FailureSingleton {
   var firstTime = true
 }
 
+@SlowSQLTest
 class StreamingAggregationSuite extends StateStoreMetricsTest with Assertions {
 
   import testImplicits._
@@ -209,7 +212,7 @@ class StreamingAggregationSuite extends StateStoreMetricsTest with Assertions {
       }
 
       def stateOperatorProgresses: Seq[StateOperatorProgress] = {
-        lastExecutedBatch.stateOperators
+        lastExecutedBatch.stateOperators.toImmutableArraySeq
       }
     }
 
@@ -705,7 +708,7 @@ class StreamingAggregationSuite extends StateStoreMetricsTest with Assertions {
       .groupBy("group")
       .agg(collect_list("value"))
     testStream(df, outputMode = OutputMode.Update)(
-      AddData(input, (1 to spark.sqlContext.conf.objectAggSortBasedFallbackThreshold): _*),
+      AddData(input, (1 to spark.sessionState.conf.objectAggSortBasedFallbackThreshold): _*),
       AssertOnQuery { q =>
         q.processAllAvailable()
         true
@@ -956,3 +959,7 @@ class StreamingAggregationSuite extends StateStoreMetricsTest with Assertions {
     }
   }
 }
+
+@SlowSQLTest
+class RocksDBStateStoreStreamingAggregationSuite
+  extends StreamingAggregationSuite with RocksDBStateStoreTest

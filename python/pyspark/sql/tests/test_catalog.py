@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 from pyspark import StorageLevel
-from pyspark.errors import AnalysisException
+from pyspark.errors import AnalysisException, PySparkTypeError
 from pyspark.sql.types import StructType, StructField, IntegerType
 from pyspark.testing.sqlutils import ReusedSQLTestCase
 
@@ -42,6 +42,10 @@ class CatalogTestsMixin:
             spark.sql("CREATE DATABASE some_db")
             databases = [db.name for db in spark.catalog.listDatabases()]
             self.assertEqual(sorted(databases), ["default", "some_db"])
+            databases = [db.name for db in spark.catalog.listDatabases("def*")]
+            self.assertEqual(sorted(databases), ["default"])
+            databases = [db.name for db in spark.catalog.listDatabases("def2*")]
+            self.assertEqual(sorted(databases), [])
 
     def test_database_exists(self):
         # SPARK-36207: testing that database_exists returns correct boolean
@@ -77,18 +81,37 @@ class CatalogTestsMixin:
 
                     schema = StructType([StructField("a", IntegerType(), True)])
                     description = "this a table created via Catalog.createTable()"
+
+                    with self.assertRaisesRegex(PySparkTypeError, "should be a struct type"):
+                        # Test deprecated API and negative error case.
+                        spark.catalog.createExternalTable(
+                            "invalid_table_creation", schema=IntegerType(), description=description
+                        )
+
                     spark.catalog.createTable(
                         "tab3_via_catalog", schema=schema, description=description
                     )
 
                     tables = sorted(spark.catalog.listTables(), key=lambda t: t.name)
+                    tablesWithPattern = sorted(
+                        spark.catalog.listTables(pattern="tab*"), key=lambda t: t.name
+                    )
                     tablesDefault = sorted(
                         spark.catalog.listTables("default"), key=lambda t: t.name
                     )
+                    tablesDefaultWithPattern = sorted(
+                        spark.catalog.listTables("default", "tab*"), key=lambda t: t.name
+                    )
                     tablesSomeDb = sorted(spark.catalog.listTables("some_db"), key=lambda t: t.name)
+                    tablesSomeDbWithPattern = sorted(
+                        spark.catalog.listTables("some_db", "tab*"), key=lambda t: t.name
+                    )
                     self.assertEqual(tables, tablesDefault)
+                    self.assertEqual(tablesWithPattern, tablesDefaultWithPattern)
                     self.assertEqual(len(tables), 3)
+                    self.assertEqual(len(tablesWithPattern), 2)
                     self.assertEqual(len(tablesSomeDb), 2)
+                    self.assertEqual(len(tablesSomeDbWithPattern), 1)
 
                     # make table in old fashion
                     def makeTable(
@@ -155,6 +178,30 @@ class CatalogTestsMixin:
                     )
                     self.assertTrue(
                         compareTables(
+                            tablesWithPattern[0],
+                            makeTable(
+                                name="tab1",
+                                database="default",
+                                description=None,
+                                tableType="MANAGED",
+                                isTemporary=False,
+                            ),
+                        )
+                    )
+                    self.assertTrue(
+                        compareTables(
+                            tablesWithPattern[1],
+                            makeTable(
+                                name="tab3_via_catalog",
+                                database="default",
+                                description=description,
+                                tableType="MANAGED",
+                                isTemporary=False,
+                            ),
+                        )
+                    )
+                    self.assertTrue(
+                        compareTables(
                             tablesSomeDb[0],
                             makeTable(
                                 name="tab2",
@@ -174,6 +221,18 @@ class CatalogTestsMixin:
                                 description=None,
                                 tableType="TEMPORARY",
                                 isTemporary=True,
+                            ),
+                        )
+                    )
+                    self.assertTrue(
+                        compareTables(
+                            tablesSomeDbWithPattern[0],
+                            makeTable(
+                                name="tab2",
+                                database="some_db",
+                                description=None,
+                                tableType="MANAGED",
+                                isTemporary=False,
                             ),
                         )
                     )
@@ -204,6 +263,25 @@ class CatalogTestsMixin:
             )
             self.assertTrue(functions["+"].isTemporary)
             self.assertEqual(functions, functionsDefault)
+
+            functionsWithPattern = dict(
+                (f.name, f) for f in spark.catalog.listFunctions(pattern="to*")
+            )
+            functionsDefaultWithPattern = dict(
+                (f.name, f) for f in spark.catalog.listFunctions("default", "to*")
+            )
+            self.assertTrue(len(functionsWithPattern) > 10)
+            self.assertFalse("+" in functionsWithPattern)
+            self.assertFalse("like" in functionsWithPattern)
+            self.assertFalse("month" in functionsWithPattern)
+            self.assertTrue("to_date" in functionsWithPattern)
+            self.assertTrue("to_timestamp" in functionsWithPattern)
+            self.assertTrue("to_unix_timestamp" in functionsWithPattern)
+            self.assertEqual(functionsWithPattern, functionsDefaultWithPattern)
+            functionsWithPattern = dict(
+                (f.name, f) for f in spark.catalog.listFunctions(pattern="*not_existing_func*")
+            )
+            self.assertTrue(len(functionsWithPattern) == 0)
 
             with self.function("func1", "some_db.func2"):
                 try:
@@ -399,7 +477,7 @@ class CatalogTestsMixin:
         import tempfile
 
         spark = self.spark
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="test_refresh_table") as tmp_dir:
             with self.table("my_tab"):
                 spark.sql(
                     "CREATE TABLE my_tab (col STRING) USING TEXT LOCATION '{}'".format(tmp_dir)
@@ -415,7 +493,7 @@ class CatalogTestsMixin:
                 self.assertEqual(spark.table("my_tab").count(), 0)
 
 
-class CatalogTests(ReusedSQLTestCase):
+class CatalogTests(CatalogTestsMixin, ReusedSQLTestCase):
     pass
 
 

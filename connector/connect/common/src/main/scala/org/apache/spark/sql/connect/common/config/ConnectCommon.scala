@@ -16,7 +16,8 @@
  */
 package org.apache.spark.sql.connect.common.config
 
-private[connect] object ConnectCommon {
+private[sql] object ConnectCommon {
   val CONNECT_GRPC_BINDING_PORT: Int = 15002
-  val CONNECT_GRPC_MAX_MESSAGE_SIZE: Int = 128 * 1024 * 1024;
+  val CONNECT_GRPC_MAX_MESSAGE_SIZE: Int = 128 * 1024 * 1024
+  val CONNECT_GRPC_MARSHALLER_RECURSION_LIMIT: Int = 1024
 }

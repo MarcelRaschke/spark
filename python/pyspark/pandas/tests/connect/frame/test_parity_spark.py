@@ -16,20 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.frame.test_spark import FrameSparkMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
-class FrameParitySparkTests(FrameSparkMixin, PandasOnSparkTestUtils, ReusedConnectTestCase):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip("TODO(SPARK-43619): Enable DataFrameSlowParityTests.test_udt.")
-    def test_udt(self):
-        super().test_udt()
+class FrameParitySparkTests(
+    FrameSparkMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
+):
+    pass
 
 
 if __name__ == "__main__":

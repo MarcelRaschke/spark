@@ -425,17 +425,9 @@ select from_json(
   'd date',
   map('dateFormat', 'MM-dd'))
 -- !query schema
-struct<>
+struct<from_json({"d": "02-29"}):struct<d:date>>
 -- !query output
-org.apache.spark.SparkUpgradeException
-{
-  "errorClass" : "INCONSISTENT_BEHAVIOR_CROSS_VERSION.PARSE_DATETIME_BY_NEW_PARSER",
-  "sqlState" : "42K0B",
-  "messageParameters" : {
-    "config" : "\"spark.sql.legacy.timeParserPolicy\"",
-    "datetime" : "'02-29'"
-  }
-}
+{"d":null}
 
 
 -- !query
@@ -444,17 +436,9 @@ select from_json(
   't timestamp',
   map('timestampFormat', 'MM-dd'))
 -- !query schema
-struct<>
+struct<from_json({"t": "02-29"}):struct<t:timestamp>>
 -- !query output
-org.apache.spark.SparkUpgradeException
-{
-  "errorClass" : "INCONSISTENT_BEHAVIOR_CROSS_VERSION.PARSE_DATETIME_BY_NEW_PARSER",
-  "sqlState" : "42K0B",
-  "messageParameters" : {
-    "config" : "\"spark.sql.legacy.timeParserPolicy\"",
-    "datetime" : "'02-29'"
-  }
-}
+{"t":null}
 
 
 -- !query
@@ -494,7 +478,7 @@ select schema_of_json(null)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_NULL",
   "sqlState" : "42K09",
@@ -525,13 +509,13 @@ SELECT schema_of_json(jsonField) FROM jsonTable
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputExpr" : "\"jsonField\"",
-    "inputName" : "json",
+    "inputName" : "`json`",
     "inputType" : "\"STRING\"",
     "sqlExpr" : "\"schema_of_json(jsonField)\""
   },
@@ -558,14 +542,14 @@ select json_array_length(2)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"2\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"STRING\"",
     "sqlExpr" : "\"json_array_length(2)\""
   },
@@ -706,14 +690,14 @@ select json_object_keys(200)
 -- !query schema
 struct<>
 -- !query output
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"200\"",
     "inputType" : "\"INT\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"STRING\"",
     "sqlExpr" : "\"json_object_keys(200)\""
   },

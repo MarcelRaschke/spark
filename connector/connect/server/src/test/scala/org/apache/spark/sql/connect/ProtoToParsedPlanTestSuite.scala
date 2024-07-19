@@ -26,16 +26,21 @@ import scala.util.{Failure, Success, Try}
 
 import org.apache.spark.{SparkConf, SparkFunSuite}
 import org.apache.spark.connect.proto
+import org.apache.spark.internal.LogKeys.PATH
+import org.apache.spark.internal.MDC
 import org.apache.spark.sql.catalyst.{catalog, QueryPlanningTracker}
 import org.apache.spark.sql.catalyst.analysis.{caseSensitiveResolution, Analyzer, FunctionRegistry, Resolver, TableFunctionRegistry}
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog
-import org.apache.spark.sql.catalyst.optimizer.ReplaceExpressions
+import org.apache.spark.sql.catalyst.optimizer.{ReplaceExpressions, RewriteWithExpression}
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+import org.apache.spark.sql.catalyst.rules.RuleExecutor
 import org.apache.spark.sql.connect.config.Connect
 import org.apache.spark.sql.connect.planner.SparkConnectPlanner
-import org.apache.spark.sql.connector.catalog.{CatalogManager, Identifier, InMemoryCatalog}
+import org.apache.spark.sql.connect.service.SessionHolder
+import org.apache.spark.sql.connector.catalog.{CatalogManager, Column, Identifier, InMemoryCatalog}
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.test.SharedSparkSession
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.LongType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.util.Utils
 
@@ -56,12 +61,24 @@ import org.apache.spark.util.Utils
  * {{{
  *   SPARK_GENERATE_GOLDEN_FILES=1 build/sbt "connect/testOnly org.apache.spark.sql.connect.ProtoToParsedPlanTestSuite"
  * }}}
+ *
+ * If you need to clean the orphaned golden files, you need to set the
+ * SPARK_CLEAN_ORPHANED_GOLDEN_FILES=1 environment variable before running this test, e.g.:
+ * {{{
+ *   SPARK_CLEAN_ORPHANED_GOLDEN_FILES=1 build/sbt "connect/testOnly org.apache.spark.sql.connect.ProtoToParsedPlanTestSuite"
+ * }}}
+ * Note: not all orphaned golden files should be cleaned, some are reserved for testing backups
+ * compatibility.
  */
 // scalastyle:on
 class ProtoToParsedPlanTestSuite
     extends SparkFunSuite
     with SharedSparkSession
     with ResourceHelper {
+
+  private val cleanOrphanedGoldenFiles: Boolean =
+    System.getenv("SPARK_CLEAN_ORPHANED_GOLDEN_FILES") == "1"
+
   val url = "jdbc:h2:mem:testdb0"
   var conn: java.sql.Connection = null
 
@@ -94,6 +111,9 @@ class ProtoToParsedPlanTestSuite
 
   override def afterAll(): Unit = {
     conn.close()
+    if (cleanOrphanedGoldenFiles) {
+      cleanOrphanedGoldenFile()
+    }
     super.afterAll()
   }
 
@@ -106,6 +126,7 @@ class ProtoToParsedPlanTestSuite
         Connect.CONNECT_EXTENSIONS_EXPRESSION_CLASSES.key,
         "org.apache.spark.sql.connect.plugin.ExampleExpressionPlugin")
       .set(org.apache.spark.sql.internal.SQLConf.ANSI_ENABLED.key, false.toString)
+      .set(org.apache.spark.sql.internal.SQLConf.USE_COMMON_EXPR_ID_FOR_ALIAS.key, false.toString)
   }
 
   protected val suiteBaseResourcePath = commonResourcePath.resolve("query-tests")
@@ -119,12 +140,12 @@ class ProtoToParsedPlanTestSuite
     inMemoryCatalog.createNamespace(Array("tempdb"), emptyProps)
     inMemoryCatalog.createTable(
       Identifier.of(Array("tempdb"), "myTable"),
-      new StructType().add("id", "long"),
+      Array(Column.create("id", LongType)),
       Array.empty[Transform],
       emptyProps)
     inMemoryCatalog.createTable(
       Identifier.of(Array("tempdb"), "myStreamingTable"),
-      new StructType().add("id", "long"),
+      Array(Column.create("id", LongType)),
       Array.empty[Transform],
       emptyProps)
 
@@ -156,17 +177,24 @@ class ProtoToParsedPlanTestSuite
     val relativePath = inputFilePath.relativize(file)
     val fileName = relativePath.getFileName.toString
     if (!fileName.endsWith(".proto.bin")) {
-      logError(s"Skipping $fileName")
+      logError(log"Skipping ${MDC(PATH, fileName)}")
       return
     }
     val name = fileName.stripSuffix(".proto.bin")
     test(name) {
       val relation = readRelation(file)
-      val planner = new SparkConnectPlanner(spark)
+      val planner = new SparkConnectPlanner(SessionHolder.forTesting(spark))
       val catalystPlan =
         analyzer.executeAndCheck(planner.transformRelation(relation), new QueryPlanningTracker)
-      val actual =
-        removeMemoryAddress(normalizeExprIds(ReplaceExpressions(catalystPlan)).treeString)
+      val finalAnalyzedPlan = {
+        object Helper extends RuleExecutor[LogicalPlan] {
+          val batches =
+            Batch("Finish Analysis", Once, ReplaceExpressions) ::
+              Batch("Rewrite With expression", Once, RewriteWithExpression) :: Nil
+        }
+        Helper.execute(catalystPlan)
+      }
+      val actual = removeMemoryAddress(normalizeExprIds(finalAnalyzedPlan).treeString)
       val goldenFile = goldenFilePath.resolve(relativePath).getParent.resolve(name + ".explain")
       Try(readGoldenFile(goldenFile)) match {
         case Success(expected) if expected == actual => // Test passes.
@@ -192,6 +220,14 @@ class ProtoToParsedPlanTestSuite
               "SPARK_GENERATE_GOLDEN_FILES=1 environment variable set")
       }
     }
+  }
+
+  private def cleanOrphanedGoldenFile(): Unit = {
+    val orphans = Utils
+      .recursiveList(goldenFilePath.toFile)
+      .filter(g => g.getAbsolutePath.endsWith(".explain"))
+      .filter(g => !testNames.contains(g.getName.stripSuffix(".explain")))
+    orphans.foreach(Utils.deleteRecursively)
   }
 
   private def removeMemoryAddress(expr: String): String = {

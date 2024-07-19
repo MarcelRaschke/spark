@@ -23,6 +23,7 @@ AUTHORIZATION	true
 BETWEEN	false
 BIGINT	false
 BINARY	false
+BINDING	false
 BOOLEAN	false
 BOTH	true
 BUCKET	false
@@ -44,6 +45,7 @@ CLUSTER	false
 CLUSTERED	false
 CODEGEN	false
 COLLATE	true
+COLLATION	true
 COLLECTION	false
 COLUMN	true
 COLUMNS	false
@@ -51,6 +53,7 @@ COMMENT	false
 COMMIT	false
 COMPACT	false
 COMPACTIONS	false
+COMPENSATION	false
 COMPUTE	false
 CONCATENATE	false
 CONSTRAINT	true
@@ -77,6 +80,7 @@ DAYS	false
 DBPROPERTIES	false
 DEC	false
 DECIMAL	false
+DECLARE	false
 DEFAULT	false
 DEFINED	false
 DELETE	false
@@ -95,9 +99,11 @@ ELSE	true
 END	true
 ESCAPE	true
 ESCAPED	false
+EVOLUTION	false
 EXCEPT	true
 EXCHANGE	false
 EXCLUDE	false
+EXECUTE	true
 EXISTS	false
 EXPLAIN	false
 EXPORT	false
@@ -132,6 +138,7 @@ IDENTIFIER	false
 IF	false
 IGNORE	false
 ILIKE	false
+IMMEDIATE	false
 IMPORT	false
 IN	true
 INCLUDE	false
@@ -180,12 +187,14 @@ MINUTES	false
 MONTH	false
 MONTHS	false
 MSCK	false
+NAME	false
 NAMESPACE	false
 NAMESPACES	false
 NANOSECOND	false
 NANOSECONDS	false
 NATURAL	true
 NO	false
+NOT	true
 NULL	true
 NULLS	false
 NUMERIC	false
@@ -208,8 +217,6 @@ PARTITION	false
 PARTITIONED	false
 PARTITIONS	false
 PERCENT	false
-PERCENTILE_CONT	true
-PERCENTILE_DISC	true
 PIVOT	false
 PLACING	false
 POSITION	false
@@ -257,6 +264,7 @@ SET	false
 SETS	false
 SHORT	false
 SHOW	false
+SINGLE	false
 SKEWED	false
 SMALLINT	false
 SOME	true
@@ -282,6 +290,7 @@ TBLPROPERTIES	false
 TERMINATED	false
 THEN	true
 TIME	true
+TIMEDIFF	false
 TIMESTAMP	false
 TIMESTAMPADD	false
 TIMESTAMPDIFF	false
@@ -313,7 +322,10 @@ USE	false
 USER	true
 USING	true
 VALUES	false
+VAR	false
 VARCHAR	false
+VARIABLE	false
+VARIANT	false
 VERSION	false
 VIEW	false
 VIEWS	false
@@ -346,6 +358,7 @@ CASE
 CAST
 CHECK
 COLLATE
+COLLATION
 COLUMN
 CONSTRAINT
 CREATE
@@ -359,6 +372,7 @@ ELSE
 END
 ESCAPE
 EXCEPT
+EXECUTE
 FALSE
 FETCH
 FILTER
@@ -379,6 +393,7 @@ LATERAL
 LEADING
 LEFT
 NATURAL
+NOT
 NULL
 OFFSET
 ON
@@ -387,8 +402,6 @@ OR
 ORDER
 OUTER
 OVERLAPS
-PERCENTILE_CONT
-PERCENTILE_DISC
 PRIMARY
 REFERENCES
 RIGHT

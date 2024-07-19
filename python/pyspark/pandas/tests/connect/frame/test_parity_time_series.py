@@ -16,24 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.frame.test_time_series import FrameTimeSeriesMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
 class FrameParityTimeSeriesTests(
-    FrameTimeSeriesMixin, PandasOnSparkTestUtils, ReusedConnectTestCase
+    FrameTimeSeriesMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
 ):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip(
-        "TODO(SPARK-43611): Fix unexpected `AnalysisException` from Spark Connect client."
-    )
-    def test_shift(self):
-        super().test_shift()
+    pass
 
 
 if __name__ == "__main__":

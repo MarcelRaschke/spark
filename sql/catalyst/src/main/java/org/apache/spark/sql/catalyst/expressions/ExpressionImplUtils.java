@@ -17,8 +17,10 @@
 
 package org.apache.spark.sql.catalyst.expressions;
 
+import org.apache.spark.SparkBuildInfo;
 import org.apache.spark.sql.errors.QueryExecutionErrors;
 import org.apache.spark.unsafe.types.UTF8String;
+import org.apache.spark.util.VersionUtils;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
@@ -34,8 +36,7 @@ import java.security.spec.AlgorithmParameterSpec;
  * A utility class for constructing expressions.
  */
 public class ExpressionImplUtils {
-  private static final ThreadLocal<SecureRandom> threadLocalSecureRandom =
-          ThreadLocal.withInitial(SecureRandom::new);
+  private static final SecureRandom secureRandom = new SecureRandom();
 
   private static final int GCM_IV_LEN = 12;
   private static final int GCM_TAG_LEN = 128;
@@ -111,14 +112,6 @@ public class ExpressionImplUtils {
     return checkSum % 10 == 0;
   }
 
-  public static byte[] aesEncrypt(byte[] input, byte[] key, UTF8String mode, UTF8String padding) {
-    return aesEncrypt(input, key, mode, padding, null, null);
-  }
-
-  public static byte[] aesDecrypt(byte[] input, byte[] key, UTF8String mode, UTF8String padding) {
-    return aesDecrypt(input, key, mode, padding, null);
-  }
-
   public static byte[] aesEncrypt(byte[] input,
                                   byte[] key,
                                   UTF8String mode,
@@ -152,30 +145,36 @@ public class ExpressionImplUtils {
     );
   }
 
+  /**
+   * Function to return the Spark version.
+   * @return
+   *  Space separated version and revision.
+   */
+  public static UTF8String getSparkVersion() {
+    String shortVersion = VersionUtils.shortVersion(SparkBuildInfo.spark_version());
+    String revision = SparkBuildInfo.spark_revision();
+    return UTF8String.fromString(shortVersion + " " + revision);
+  }
+
   private static SecretKeySpec getSecretKeySpec(byte[] key) {
-    switch (key.length) {
-      case 16: case 24: case 32:
-        return new SecretKeySpec(key, 0, key.length, "AES");
-      default:
-        throw QueryExecutionErrors.invalidAesKeyLengthError(key.length);
-    }
+    return switch (key.length) {
+      case 16, 24, 32 -> new SecretKeySpec(key, 0, key.length, "AES");
+      default -> throw QueryExecutionErrors.invalidAesKeyLengthError(key.length);
+    };
   }
 
   private static byte[] generateIv(CipherMode mode) {
     byte[] iv = new byte[mode.ivLength];
-    threadLocalSecureRandom.get().nextBytes(iv);
+    secureRandom.nextBytes(iv);
     return iv;
   }
 
   private static AlgorithmParameterSpec getParamSpec(CipherMode mode, byte[] input) {
-    switch (mode) {
-      case CBC:
-        return new IvParameterSpec(input, 0, mode.ivLength);
-      case GCM:
-        return new GCMParameterSpec(mode.tagLength, input, 0, mode.ivLength);
-      default:
-        return null;
-    }
+    return switch (mode) {
+      case CBC -> new IvParameterSpec(input, 0, mode.ivLength);
+      case GCM -> new GCMParameterSpec(mode.tagLength, input, 0, mode.ivLength);
+      default -> null;
+    };
   }
 
   private static byte[] aesInternal(
@@ -192,7 +191,7 @@ public class ExpressionImplUtils {
       Cipher cipher = Cipher.getInstance(cipherMode.transformation);
       if (opmode == Cipher.ENCRYPT_MODE) {
         // This may be 0-length for ECB
-        if (iv == null) {
+        if (iv == null || iv.length == 0) {
           iv = generateIv(cipherMode);
         } else if (!cipherMode.usesSpec) {
           // If the caller passes an IV, ensure the mode actually uses it.
@@ -210,7 +209,7 @@ public class ExpressionImplUtils {
         }
 
         // If the cipher mode supports additional authenticated data and it is provided, update it
-        if (aad != null) {
+        if (aad != null && aad.length != 0) {
           if (cipherMode.supportsAad != true) {
             throw QueryExecutionErrors.aesUnsupportedAad(mode);
           }
@@ -231,7 +230,7 @@ public class ExpressionImplUtils {
         if (cipherMode.usesSpec) {
           AlgorithmParameterSpec algSpec = getParamSpec(cipherMode, input);
           cipher.init(opmode, secretKey, algSpec);
-          if (aad != null) {
+          if (aad != null && aad.length != 0) {
             if (cipherMode.supportsAad != true) {
               throw QueryExecutionErrors.aesUnsupportedAad(mode);
             }

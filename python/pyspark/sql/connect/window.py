@@ -18,24 +18,23 @@ from pyspark.sql.connect.utils import check_dependencies
 
 check_dependencies(__name__)
 
-import sys
 from typing import TYPE_CHECKING, Union, Sequence, List, Optional
 
-from pyspark.sql.connect.column import Column
+from pyspark.sql.column import Column
+from pyspark.sql.window import (
+    Window as ParentWindow,
+    WindowSpec as ParentWindowSpec,
+)
 from pyspark.sql.connect.expressions import (
     ColumnReference,
     Expression,
     SortOrder,
 )
-from pyspark.sql.connect.types import (
-    JVM_LONG_MIN,
-    JVM_LONG_MAX,
-)
 from pyspark.sql.window import Window as PySparkWindow, WindowSpec as PySparkWindowSpec
 from pyspark.errors import PySparkTypeError
 
 if TYPE_CHECKING:
-    from pyspark.sql.connect._typing import ColumnOrName
+    from pyspark.sql.connect._typing import ColumnOrName, ColumnOrName_
 
 __all__ = ["Window", "WindowSpec"]
 
@@ -63,14 +62,23 @@ class WindowFrame:
             return f"WindowFrame(RANGE_FRAME, {self._start}, {self._end})"
 
 
-class WindowSpec:
+class WindowSpec(ParentWindowSpec):
+    def __new__(
+        cls,
+        partitionSpec: Sequence[Expression],
+        orderSpec: Sequence[SortOrder],
+        frame: Optional[WindowFrame],
+    ) -> "WindowSpec":
+        self = object.__new__(cls)
+        self.__init__(partitionSpec, orderSpec, frame)  # type: ignore[misc]
+        return self
+
     def __init__(
         self,
         partitionSpec: Sequence[Expression],
         orderSpec: Sequence[SortOrder],
         frame: Optional[WindowFrame],
     ) -> None:
-
         assert isinstance(partitionSpec, list) and all(
             isinstance(p, Expression) for p in partitionSpec
         )
@@ -85,7 +93,7 @@ class WindowSpec:
 
         self._frame = frame
 
-    def partitionBy(self, *cols: Union["ColumnOrName", List["ColumnOrName"]]) -> "WindowSpec":
+    def partitionBy(self, *cols: Union["ColumnOrName", List["ColumnOrName_"]]) -> ParentWindowSpec:
         _cols: List[ColumnOrName] = []
         for col in cols:
             if isinstance(col, (str, Column)):
@@ -106,11 +114,11 @@ class WindowSpec:
                 )
 
         newPartitionSpec: List[Expression] = []
-        for c in _cols:
+        for c in _cols:  # type: ignore[assignment]
             if isinstance(c, Column):
-                newPartitionSpec.append(c._expr)
+                newPartitionSpec.append(c._expr)  # type: ignore[arg-type]
             else:
-                newPartitionSpec.append(ColumnReference(c))
+                newPartitionSpec.append(ColumnReference(c))  # type: ignore[arg-type]
 
         return WindowSpec(
             partitionSpec=newPartitionSpec,
@@ -118,7 +126,7 @@ class WindowSpec:
             frame=self._frame,
         )
 
-    def orderBy(self, *cols: Union["ColumnOrName", List["ColumnOrName"]]) -> "WindowSpec":
+    def orderBy(self, *cols: Union["ColumnOrName", List["ColumnOrName_"]]) -> ParentWindowSpec:
         _cols: List[ColumnOrName] = []
         for col in cols:
             if isinstance(col, (str, Column)):
@@ -139,14 +147,14 @@ class WindowSpec:
                 )
 
         newOrderSpec: List[SortOrder] = []
-        for c in _cols:
+        for c in _cols:  # type: ignore[assignment]
             if isinstance(c, Column):
                 if isinstance(c._expr, SortOrder):
                     newOrderSpec.append(c._expr)
                 else:
-                    newOrderSpec.append(SortOrder(c._expr))
+                    newOrderSpec.append(SortOrder(c._expr))  # type: ignore[arg-type]
             else:
-                newOrderSpec.append(SortOrder(ColumnReference(c)))
+                newOrderSpec.append(SortOrder(ColumnReference(c)))  # type: ignore[arg-type]
 
         return WindowSpec(
             partitionSpec=self._partitionSpec,
@@ -154,7 +162,7 @@ class WindowSpec:
             frame=self._frame,
         )
 
-    def rowsBetween(self, start: int, end: int) -> "WindowSpec":
+    def rowsBetween(self, start: int, end: int) -> ParentWindowSpec:
         if start <= Window._PRECEDING_THRESHOLD:
             start = Window.unboundedPreceding
         if end >= Window._FOLLOWING_THRESHOLD:
@@ -166,7 +174,7 @@ class WindowSpec:
             frame=WindowFrame(isRowFrame=True, start=start, end=end),
         )
 
-    def rangeBetween(self, start: int, end: int) -> "WindowSpec":
+    def rangeBetween(self, start: int, end: int) -> ParentWindowSpec:
         if start <= Window._PRECEDING_THRESHOLD:
             start = Window.unboundedPreceding
         if end >= Window._FOLLOWING_THRESHOLD:
@@ -198,32 +206,23 @@ WindowSpec.partitionBy.__doc__ = PySparkWindowSpec.partitionBy.__doc__
 WindowSpec.__doc__ = PySparkWindowSpec.__doc__
 
 
-class Window:
-    _PRECEDING_THRESHOLD = max(-sys.maxsize, JVM_LONG_MIN)
-    _FOLLOWING_THRESHOLD = min(sys.maxsize, JVM_LONG_MAX)
-
-    unboundedPreceding: int = JVM_LONG_MIN
-
-    unboundedFollowing: int = JVM_LONG_MAX
-
-    currentRow: int = 0
-
+class Window(ParentWindow):
     _spec = WindowSpec(partitionSpec=[], orderSpec=[], frame=None)
 
     @staticmethod
-    def partitionBy(*cols: Union["ColumnOrName", List["ColumnOrName"]]) -> "WindowSpec":
+    def partitionBy(*cols: Union["ColumnOrName", List["ColumnOrName_"]]) -> ParentWindowSpec:
         return Window._spec.partitionBy(*cols)
 
     @staticmethod
-    def orderBy(*cols: Union["ColumnOrName", List["ColumnOrName"]]) -> "WindowSpec":
+    def orderBy(*cols: Union["ColumnOrName", List["ColumnOrName_"]]) -> ParentWindowSpec:
         return Window._spec.orderBy(*cols)
 
     @staticmethod
-    def rowsBetween(start: int, end: int) -> "WindowSpec":
+    def rowsBetween(start: int, end: int) -> ParentWindowSpec:
         return Window._spec.rowsBetween(start, end)
 
     @staticmethod
-    def rangeBetween(start: int, end: int) -> "WindowSpec":
+    def rangeBetween(start: int, end: int) -> ParentWindowSpec:
         return Window._spec.rangeBetween(start, end)
 
 
@@ -235,6 +234,7 @@ Window.__doc__ = PySparkWindow.__doc__
 
 
 def _test() -> None:
+    import os
     import sys
     import doctest
     from pyspark.sql import SparkSession as PySparkSession
@@ -242,7 +242,9 @@ def _test() -> None:
 
     globs = pyspark.sql.connect.window.__dict__.copy()
     globs["spark"] = (
-        PySparkSession.builder.appName("sql.connect.window tests").remote("local[4]").getOrCreate()
+        PySparkSession.builder.appName("sql.connect.window tests")
+        .remote(os.environ.get("SPARK_CONNECT_TESTING_REMOTE", "local[4]"))
+        .getOrCreate()
     )
 
     (failure_count, test_count) = doctest.testmod(

@@ -19,6 +19,13 @@ package org.apache.spark.sql.streaming
 
 import java.util.UUID
 
+import com.fasterxml.jackson.databind.{DeserializationFeature, ObjectMapper}
+import com.fasterxml.jackson.module.scala.{ClassTagExtensions, DefaultScalaModule}
+import org.json4s.{JObject, JString}
+import org.json4s.JsonAST.JValue
+import org.json4s.JsonDSL.{jobject2assoc, pair2Assoc}
+import org.json4s.jackson.JsonMethods.{compact, render}
+
 import org.apache.spark.annotation.Evolving
 import org.apache.spark.scheduler.SparkListenerEvent
 
@@ -29,7 +36,7 @@ import org.apache.spark.scheduler.SparkListenerEvent
  * @since 2.0.0
  */
 @Evolving
-abstract class StreamingQueryListener {
+abstract class StreamingQueryListener extends Serializable {
 
   import StreamingQueryListener._
 
@@ -101,7 +108,7 @@ private[spark] class PythonStreamingQueryListenerWrapper(
  * @since 2.0.0
  */
 @Evolving
-object StreamingQueryListener {
+object StreamingQueryListener extends Serializable {
 
   /**
    * Base type of [[StreamingQueryListener]] events
@@ -123,7 +130,32 @@ object StreamingQueryListener {
       val id: UUID,
       val runId: UUID,
       val name: String,
-      val timestamp: String) extends Event
+      val timestamp: String) extends Event with Serializable {
+
+    def json: String = compact(render(jsonValue))
+
+    private def jsonValue: JValue = {
+      ("id" -> JString(id.toString)) ~
+      ("runId" -> JString(runId.toString)) ~
+      ("name" -> JString(name)) ~
+      ("timestamp" -> JString(timestamp))
+    }
+  }
+
+  private[spark] object QueryStartedEvent {
+    private val mapper = {
+      val ret = new ObjectMapper() with ClassTagExtensions
+      ret.registerModule(DefaultScalaModule)
+      ret.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+      ret
+    }
+
+    private[spark] def jsonString(event: QueryStartedEvent): String =
+      mapper.writeValueAsString(event)
+
+    private[spark] def fromJson(json: String): QueryStartedEvent =
+      mapper.readValue[QueryStartedEvent](json)
+  }
 
   /**
    * Event representing any progress updates in a query.
@@ -132,6 +164,27 @@ object StreamingQueryListener {
    */
   @Evolving
   class QueryProgressEvent private[sql](val progress: StreamingQueryProgress) extends Event
+    with Serializable {
+
+    def json: String = compact(render(jsonValue))
+
+    private def jsonValue: JValue = JObject("progress" -> progress.jsonValue)
+  }
+
+  private[spark] object QueryProgressEvent {
+    private val mapper = {
+      val ret = new ObjectMapper() with ClassTagExtensions
+      ret.registerModule(DefaultScalaModule)
+      ret.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+      ret
+    }
+
+    private[spark] def jsonString(event: QueryProgressEvent): String =
+      mapper.writeValueAsString(event)
+
+    private[spark] def fromJson(json: String): QueryProgressEvent =
+      mapper.readValue[QueryProgressEvent](json)
+  }
 
   /**
    * Event representing that query is idle and waiting for new data to process.
@@ -145,7 +198,31 @@ object StreamingQueryListener {
   class QueryIdleEvent private[sql](
       val id: UUID,
       val runId: UUID,
-      val timestamp: String) extends Event
+      val timestamp: String) extends Event with Serializable {
+
+    def json: String = compact(render(jsonValue))
+
+    private def jsonValue: JValue = {
+      ("id" -> JString(id.toString)) ~
+      ("runId" -> JString(runId.toString)) ~
+      ("timestamp" -> JString(timestamp))
+    }
+  }
+
+  private[spark] object QueryIdleEvent {
+    private val mapper = {
+      val ret = new ObjectMapper() with ClassTagExtensions
+      ret.registerModule(DefaultScalaModule)
+      ret.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+      ret
+    }
+
+    private[spark] def jsonString(event: QueryTerminatedEvent): String =
+      mapper.writeValueAsString(event)
+
+    private[spark] def fromJson(json: String): QueryTerminatedEvent =
+      mapper.readValue[QueryTerminatedEvent](json)
+  }
 
   /**
    * Event representing that termination of a query.
@@ -166,10 +243,34 @@ object StreamingQueryListener {
       val id: UUID,
       val runId: UUID,
       val exception: Option[String],
-      val errorClassOnException: Option[String]) extends Event {
+      val errorClassOnException: Option[String]) extends Event with Serializable {
     // compatibility with versions in prior to 3.5.0
     def this(id: UUID, runId: UUID, exception: Option[String]) = {
       this(id, runId, exception, None)
     }
+
+    def json: String = compact(render(jsonValue))
+
+    private def jsonValue: JValue = {
+      ("id" -> JString(id.toString)) ~
+      ("runId" -> JString(runId.toString)) ~
+      ("exception" -> JString(exception.orNull)) ~
+      ("errorClassOnException" -> JString(errorClassOnException.orNull))
+    }
+  }
+
+  private[spark] object QueryTerminatedEvent {
+    private val mapper = {
+      val ret = new ObjectMapper() with ClassTagExtensions
+      ret.registerModule(DefaultScalaModule)
+      ret.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+      ret
+    }
+
+    private[spark] def jsonString(event: QueryTerminatedEvent): String =
+      mapper.writeValueAsString(event)
+
+    private[spark] def fromJson(json: String): QueryTerminatedEvent =
+      mapper.readValue[QueryTerminatedEvent](json)
   }
 }

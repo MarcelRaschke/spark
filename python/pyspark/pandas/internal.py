@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, TYPE_CHECK
 import numpy as np
 import pandas as pd
 from pandas.api.types import CategoricalDtype  # noqa: F401
+
 from pyspark._globals import _NoValue, _NoValueType
 from pyspark.sql import (
     functions as F,
@@ -32,6 +33,7 @@ from pyspark.sql import (
     Window,
 )
 from pyspark.sql.types import (  # noqa: F401
+    _drop_metadata,
     BooleanType,
     DataType,
     LongType,
@@ -39,18 +41,9 @@ from pyspark.sql.types import (  # noqa: F401
     StructType,
     StringType,
 )
-from pyspark.sql.utils import is_timestamp_ntz_preferred
-
-# For supporting Spark Connect
-from pyspark.sql.utils import is_remote
-
-# For running doctests and reference resolution in PyCharm.
+from pyspark.sql.utils import is_timestamp_ntz_preferred, is_remote
 from pyspark import pandas as ps
 from pyspark.pandas._typing import Label
-
-if TYPE_CHECKING:
-    # This is required in old Python 3.5 to prevent circular reference.
-    from pyspark.pandas.series import Series
 from pyspark.pandas.spark.utils import as_nullable_spark_type, force_decimal_precision_scale
 from pyspark.pandas.data_type_ops.base import DataTypeOps
 from pyspark.pandas.typedef import (
@@ -71,6 +64,8 @@ from pyspark.pandas.utils import (
     spark_column_equals,
 )
 
+if TYPE_CHECKING:
+    from pyspark.pandas.series import Series
 
 # A function to turn given numbers to Spark columns that represent pandas-on-Spark index.
 SPARK_INDEX_NAME_FORMAT = "__index_level_{}__".format
@@ -624,13 +619,7 @@ class InternalFrame:
         >>> internal.column_label_names
         [('column_labels_a',), ('column_labels_b',)]
         """
-        if is_remote():
-            from pyspark.sql.connect.dataframe import DataFrame as ConnectDataFrame
-
-            SparkDataFrame = ConnectDataFrame
-        else:
-            SparkDataFrame = PySparkDataFrame  # type: ignore[assignment]
-        assert isinstance(spark_frame, SparkDataFrame)
+        assert isinstance(spark_frame, PySparkDataFrame)
         assert not spark_frame.isStreaming, "pandas-on-Spark does not support Structured Streaming."
 
         if not index_spark_columns:
@@ -682,17 +671,12 @@ class InternalFrame:
         self._sdf = spark_frame
 
         # index_spark_columns
-        if is_remote():
-            from pyspark.sql.connect.column import Column as ConnectColumn
 
-            Column = ConnectColumn
-        else:
-            Column = PySparkColumn
         assert all(
-            isinstance(index_scol, Column) for index_scol in index_spark_columns
+            isinstance(index_scol, PySparkColumn) for index_scol in index_spark_columns
         ), index_spark_columns
 
-        self._index_spark_columns: List[Column] = index_spark_columns  # type: ignore[valid-type]
+        self._index_spark_columns: List[PySparkColumn] = index_spark_columns
 
         # data_spark_columns
         if data_spark_columns is None:
@@ -706,9 +690,9 @@ class InternalFrame:
                 and col not in HIDDEN_COLUMNS
             ]
         else:
-            assert all(isinstance(scol, Column) for scol in data_spark_columns)
+            assert all(isinstance(scol, PySparkColumn) for scol in data_spark_columns)
 
-        self._data_spark_columns: List[Column] = data_spark_columns  # type: ignore[valid-type]
+        self._data_spark_columns: List[PySparkColumn] = data_spark_columns
 
         # fields
         if index_fields is None:
@@ -761,7 +745,7 @@ class InternalFrame:
             ]
 
         assert all(
-            isinstance(ops.dtype, Dtype.__args__)
+            isinstance(ops.dtype, Dtype.__args__)  # type: ignore[attr-defined]
             and (
                 ops.dtype == np.dtype("object")
                 or as_spark_type(ops.dtype, raise_error=False) is not None
@@ -776,14 +760,8 @@ class InternalFrame:
                 # in a few tests when using Spark Connect. However, the function works properly.
                 # Therefore, we temporarily perform Spark Connect tests by excluding metadata
                 # until the issue is resolved.
-                def remove_metadata(struct_field: StructField) -> StructField:
-                    new_struct_field = StructField(
-                        struct_field.name, struct_field.dataType, struct_field.nullable
-                    )
-                    return new_struct_field
-
                 assert all(
-                    remove_metadata(index_field.struct_field) == remove_metadata(struct_field)
+                    _drop_metadata(index_field.struct_field) == _drop_metadata(struct_field)
                     for index_field, struct_field in zip(index_fields, struct_fields)
                 ), (index_fields, struct_fields)
             else:
@@ -795,7 +773,7 @@ class InternalFrame:
         self._index_fields: List[InternalField] = index_fields
 
         assert all(
-            isinstance(ops.dtype, Dtype.__args__)
+            isinstance(ops.dtype, Dtype.__args__)  # type: ignore[attr-defined]
             and (
                 ops.dtype == np.dtype("object")
                 or as_spark_type(ops.dtype, raise_error=False) is not None
@@ -810,14 +788,8 @@ class InternalFrame:
                 # in a few tests when using Spark Connect. However, the function works properly.
                 # Therefore, we temporarily perform Spark Connect tests by excluding metadata
                 # until the issue is resolved.
-                def remove_metadata(struct_field: StructField) -> StructField:
-                    new_struct_field = StructField(
-                        struct_field.name, struct_field.dataType, struct_field.nullable
-                    )
-                    return new_struct_field
-
                 assert all(
-                    remove_metadata(data_field.struct_field) == remove_metadata(struct_field)
+                    _drop_metadata(data_field.struct_field) == _drop_metadata(struct_field)
                     for data_field, struct_field in zip(data_fields, struct_fields)
                 ), (data_fields, struct_fields)
             else:
@@ -935,10 +907,13 @@ class InternalFrame:
         )
         return sdf.select(sequential_index.alias(column_name), *scols)
 
-    # TODO(SPARK-43610): Enable `InternalFrame.attach_distributed_column` in Spark Connect.
     @staticmethod
     def attach_distributed_column(sdf: PySparkDataFrame, column_name: str) -> PySparkDataFrame:
         scols = [scol_for(sdf, column) for column in sdf.columns]
+        # Does not add an alias to avoid having some changes in protobuf definition for now.
+        # The alias is more for query strings in DataFrame.explain, and they are cosmetic changes.
+        if is_remote():
+            return sdf.select(F.monotonically_increasing_id().alias(column_name), *scols)
         jvm = sdf.sparkSession._jvm
         tag = jvm.org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FUNC_ALIAS()
         jexpr = F.monotonically_increasing_id()._jc.expr()
@@ -971,7 +946,7 @@ class InternalFrame:
 
                 return sdf.select(
                     ConnectColumn(DistributedSequenceID()).alias(column_name),
-                    "*",  # type: ignore[call-overload]
+                    "*",
                 )
             else:
                 return PySparkDataFrame(
@@ -997,42 +972,27 @@ class InternalFrame:
 
     def spark_column_name_for(self, label_or_scol: Union[Label, PySparkColumn]) -> str:
         """Return the actual Spark column name for the given column label."""
-        if is_remote():
-            from pyspark.sql.connect.column import Column as ConnectColumn
 
-            Column = ConnectColumn
-        else:
-            Column = PySparkColumn  # type: ignore[assignment]
-        if isinstance(label_or_scol, Column):
+        if isinstance(label_or_scol, PySparkColumn):
             return self.spark_frame.select(label_or_scol).columns[0]
         else:
-            return self.field_for(label_or_scol).name  # type: ignore[arg-type]
+            return self.field_for(label_or_scol).name
 
     def spark_type_for(self, label_or_scol: Union[Label, PySparkColumn]) -> DataType:
         """Return DataType for the given column label."""
-        if is_remote():
-            from pyspark.sql.connect.column import Column as ConnectColumn
 
-            Column = ConnectColumn
-        else:
-            Column = PySparkColumn  # type: ignore[assignment]
-        if isinstance(label_or_scol, Column):
+        if isinstance(label_or_scol, PySparkColumn):
             return self.spark_frame.select(label_or_scol).schema[0].dataType
         else:
-            return self.field_for(label_or_scol).spark_type  # type: ignore[arg-type]
+            return self.field_for(label_or_scol).spark_type
 
     def spark_column_nullable_for(self, label_or_scol: Union[Label, PySparkColumn]) -> bool:
         """Return nullability for the given column label."""
-        if is_remote():
-            from pyspark.sql.connect.column import Column as ConnectColumn
 
-            Column = ConnectColumn
-        else:
-            Column = PySparkColumn  # type: ignore[assignment]
-        if isinstance(label_or_scol, Column):
+        if isinstance(label_or_scol, PySparkColumn):
             return self.spark_frame.select(label_or_scol).schema[0].nullable
         else:
-            return self.field_for(label_or_scol).nullable  # type: ignore[arg-type]
+            return self.field_for(label_or_scol).nullable
 
     def field_for(self, label: Label) -> InternalField:
         """Return InternalField for the given column label."""
@@ -1045,7 +1005,7 @@ class InternalFrame:
     @property
     def spark_frame(self) -> PySparkDataFrame:
         """Return the managed Spark DataFrame."""
-        return self._sdf  # type: ignore[has-type]
+        return self._sdf
 
     @lazy_property
     def data_spark_column_names(self) -> List[str]:

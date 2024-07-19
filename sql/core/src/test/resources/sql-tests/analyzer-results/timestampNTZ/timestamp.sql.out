@@ -237,7 +237,7 @@ create temporary view ttf1 as select * from values
 CreateViewCommand `ttf1`, select * from values
   (1, 2),
   (2, 3)
-  as ttf1(`current_date`, `current_timestamp`), false, false, LocalTempView, true
+  as ttf1(`current_date`, `current_timestamp`), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [current_date#x, current_timestamp#x]
       +- SubqueryAlias ttf1
          +- LocalRelation [current_date#x, current_timestamp#x]
@@ -248,7 +248,7 @@ select typeof(current_date), typeof(current_timestamp) from ttf1
 -- !query analysis
 Project [typeof(current_date#x) AS typeof(current_date)#x, typeof(current_timestamp#x) AS typeof(current_timestamp)#x]
 +- SubqueryAlias ttf1
-   +- View (`ttf1`, [current_date#x,current_timestamp#x])
+   +- View (`ttf1`, [current_date#x, current_timestamp#x])
       +- Project [cast(current_date#x as int) AS current_date#x, cast(current_timestamp#x as int) AS current_timestamp#x]
          +- Project [current_date#x, current_timestamp#x]
             +- SubqueryAlias ttf1
@@ -264,7 +264,7 @@ create temporary view ttf2 as select * from values
 CreateViewCommand `ttf2`, select * from values
   (1, 2),
   (2, 3)
-  as ttf2(a, b), false, false, LocalTempView, true
+  as ttf2(a, b), false, false, LocalTempView, UNSUPPORTED, true
    +- Project [a#x, b#x]
       +- SubqueryAlias ttf2
          +- LocalRelation [a#x, b#x]
@@ -553,14 +553,14 @@ select timestamp'2019-10-06 10:11:12.345678' - date'2020-01-01'
 -- !query
 select timestamp'2011-11-11 11:11:11' - '2011-11-11 11:11:10'
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"2011-11-11 11:11:10\"",
     "inputType" : "\"STRING\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"",
     "sqlExpr" : "\"(TIMESTAMP_NTZ '2011-11-11 11:11:11' - 2011-11-11 11:11:10)\""
   },
@@ -577,14 +577,14 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select '2011-11-11 11:11:11' - timestamp'2011-11-11 11:11:10'
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"2011-11-11 11:11:11\"",
     "inputType" : "\"STRING\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"",
     "sqlExpr" : "\"(2011-11-11 11:11:11 - TIMESTAMP_NTZ '2011-11-11 11:11:10')\""
   },
@@ -613,7 +613,7 @@ select null - timestamp'2011-11-11 11:11:11'
 -- !query
 create temporary view ts_view as select '2011-11-11 11:11:11' str
 -- !query analysis
-CreateViewCommand `ts_view`, select '2011-11-11 11:11:11' str, false, false, LocalTempView, true
+CreateViewCommand `ts_view`, select '2011-11-11 11:11:11' str, false, false, LocalTempView, UNSUPPORTED, true
    +- Project [2011-11-11 11:11:11 AS str#x]
       +- OneRowRelation
 
@@ -621,14 +621,14 @@ CreateViewCommand `ts_view`, select '2011-11-11 11:11:11' str, false, false, Loc
 -- !query
 select str - timestamp'2011-11-11 11:11:11' from ts_view
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"str\"",
     "inputType" : "\"STRING\"",
-    "paramIndex" : "1",
+    "paramIndex" : "first",
     "requiredType" : "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"",
     "sqlExpr" : "\"(str - TIMESTAMP_NTZ '2011-11-11 11:11:11')\""
   },
@@ -645,14 +645,14 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select timestamp'2011-11-11 11:11:11' - str from ts_view
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
   "sqlState" : "42K09",
   "messageParameters" : {
     "inputSql" : "\"str\"",
     "inputType" : "\"STRING\"",
-    "paramIndex" : "2",
+    "paramIndex" : "second",
     "requiredType" : "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"",
     "sqlExpr" : "\"(TIMESTAMP_NTZ '2011-11-11 11:11:11' - str)\""
   },
@@ -669,7 +669,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select timestamp'2011-11-11 11:11:11' + '1'
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
   "sqlState" : "42K09",
@@ -691,7 +691,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select '1' + timestamp'2011-11-11 11:11:11'
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
   "sqlState" : "42K09",
@@ -713,7 +713,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select timestamp'2011-11-11 11:11:11' + null
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
   "sqlState" : "42K09",
@@ -735,7 +735,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 select null + timestamp'2011-11-11 11:11:11'
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
   "sqlState" : "42K09",
@@ -952,5 +952,75 @@ org.apache.spark.sql.catalyst.parser.ParseException
     "startIndex" : 8,
     "stopIndex" : 64,
     "fragment" : "timestampdiff('YEAR', date'2022-02-15', date'2023-02-15')"
+  } ]
+}
+
+
+-- !query
+select timediff(QUARTER, timestamp'2023-08-10 01:02:03', timestamp'2022-01-14 01:02:03')
+-- !query analysis
+Project [timestampdiff(QUARTER, cast(2023-08-10 01:02:03 as timestamp), cast(2022-01-14 01:02:03 as timestamp), Some(America/Los_Angeles)) AS timestampdiff(QUARTER, TIMESTAMP_NTZ '2023-08-10 01:02:03', TIMESTAMP_NTZ '2022-01-14 01:02:03')#xL]
++- OneRowRelation
+
+
+-- !query
+select timediff(HOUR, timestamp'2022-02-14 01:02:03', timestamp'2022-02-14 12:00:03')
+-- !query analysis
+Project [timestampdiff(HOUR, cast(2022-02-14 01:02:03 as timestamp), cast(2022-02-14 12:00:03 as timestamp), Some(America/Los_Angeles)) AS timestampdiff(HOUR, TIMESTAMP_NTZ '2022-02-14 01:02:03', TIMESTAMP_NTZ '2022-02-14 12:00:03')#xL]
++- OneRowRelation
+
+
+-- !query
+select timediff(DAY, date'2022-02-15', date'2023-02-15')
+-- !query analysis
+[Analyzer test output redacted due to nondeterminism]
+
+
+-- !query
+select timediff(SECOND, date'2022-02-15', timestamp'2022-02-14 23:59:59')
+-- !query analysis
+[Analyzer test output redacted due to nondeterminism]
+
+
+-- !query
+select timediff('MINUTE', timestamp'2023-02-14 01:02:03', timestamp'2023-02-14 02:00:03')
+-- !query analysis
+org.apache.spark.sql.catalyst.parser.ParseException
+{
+  "errorClass" : "INVALID_PARAMETER_VALUE.DATETIME_UNIT",
+  "sqlState" : "22023",
+  "messageParameters" : {
+    "functionName" : "`timediff`",
+    "invalidValue" : "'MINUTE'",
+    "parameter" : "`unit`"
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 8,
+    "stopIndex" : 89,
+    "fragment" : "timediff('MINUTE', timestamp'2023-02-14 01:02:03', timestamp'2023-02-14 02:00:03')"
+  } ]
+}
+
+
+-- !query
+select timediff('YEAR', date'2020-02-15', date'2023-02-15')
+-- !query analysis
+org.apache.spark.sql.catalyst.parser.ParseException
+{
+  "errorClass" : "INVALID_PARAMETER_VALUE.DATETIME_UNIT",
+  "sqlState" : "22023",
+  "messageParameters" : {
+    "functionName" : "`timediff`",
+    "invalidValue" : "'YEAR'",
+    "parameter" : "`unit`"
+  },
+  "queryContext" : [ {
+    "objectType" : "",
+    "objectName" : "",
+    "startIndex" : 8,
+    "stopIndex" : 59,
+    "fragment" : "timediff('YEAR', date'2020-02-15', date'2023-02-15')"
   } ]
 }

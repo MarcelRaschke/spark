@@ -37,6 +37,7 @@ Attributes and underlying data
    :toctree: api/
 
    DataFrame.index
+   DataFrame.info
    DataFrame.columns
    DataFrame.empty
 
@@ -78,7 +79,6 @@ Indexing, iteration
    DataFrame.iloc
    DataFrame.insert
    DataFrame.items
-   DataFrame.iteritems
    DataFrame.iterrows
    DataFrame.itertuples
    DataFrame.keys
@@ -127,6 +127,7 @@ Function application, GroupBy & Window
 
    DataFrame.apply
    DataFrame.applymap
+   DataFrame.map
    DataFrame.pipe
    DataFrame.agg
    DataFrame.aggregate
@@ -154,7 +155,6 @@ Computations / Descriptive Stats
    DataFrame.ewm
    DataFrame.kurt
    DataFrame.kurtosis
-   DataFrame.mad
    DataFrame.max
    DataFrame.mean
    DataFrame.min
@@ -251,7 +251,6 @@ Combining / joining / merging
 .. autosummary::
    :toctree: api/
 
-   DataFrame.append
    DataFrame.assign
    DataFrame.merge
    DataFrame.join
@@ -272,21 +271,24 @@ Serialization / IO / Conversion
 .. autosummary::
    :toctree: api/
 
+   DataFrame.from_dict
    DataFrame.from_records
-   DataFrame.info
    DataFrame.to_table
    DataFrame.to_delta
    DataFrame.to_parquet
-   DataFrame.to_spark_io
    DataFrame.to_csv
+   DataFrame.to_orc
    DataFrame.to_pandas
    DataFrame.to_html
    DataFrame.to_numpy
    DataFrame.to_spark
    DataFrame.to_string
+   DataFrame.to_feather
+   DataFrame.to_stata
    DataFrame.to_json
    DataFrame.to_dict
    DataFrame.to_excel
+   DataFrame.to_hdf
    DataFrame.to_clipboard
    DataFrame.to_markdown
    DataFrame.to_records
@@ -300,6 +302,7 @@ in Spark. These can be accessed by ``DataFrame.spark.<function/property>``.
 
 .. autosummary::
    :toctree: api/
+   :template: autosummary/accessor_method.rst
 
    DataFrame.spark.frame
    DataFrame.spark.cache
@@ -320,8 +323,8 @@ specific plotting methods of the form ``DataFrame.plot.<kind>``.
 
 .. autosummary::
    :toctree: api/
+   :template: autosummary/accessor_method.rst
 
-   DataFrame.plot
    DataFrame.plot.area
    DataFrame.plot.barh
    DataFrame.plot.bar
@@ -331,6 +334,10 @@ specific plotting methods of the form ``DataFrame.plot.<kind>``.
    DataFrame.plot.pie
    DataFrame.plot.scatter
    DataFrame.plot.density
+
+.. autosummary::
+   :toctree: api/
+
    DataFrame.hist
    DataFrame.boxplot
    DataFrame.kde
@@ -342,6 +349,7 @@ These can be accessed by ``DataFrame.pandas_on_spark.<function/property>``.
 
 .. autosummary::
    :toctree: api/
+   :template: autosummary/accessor_method.rst
 
    DataFrame.pandas_on_spark.apply_batch
    DataFrame.pandas_on_spark.transform_batch

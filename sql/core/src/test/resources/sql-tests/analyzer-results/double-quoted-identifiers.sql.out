@@ -114,7 +114,7 @@ org.apache.spark.sql.catalyst.parser.ParseException
 -- !query
 SELECT 1 FROM `hello`
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "TABLE_OR_VIEW_NOT_FOUND",
   "sqlState" : "42P01",
@@ -147,7 +147,7 @@ org.apache.spark.sql.catalyst.analysis.NoSuchDatabaseException
 -- !query
 ALTER TABLE `not_exist` ADD COLUMN not_exist int
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "TABLE_OR_VIEW_NOT_FOUND",
   "sqlState" : "42P01",
@@ -167,7 +167,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 ALTER TABLE not_exist ADD COLUMN `not_exist` int
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "TABLE_OR_VIEW_NOT_FOUND",
   "sqlState" : "42P01",
@@ -187,7 +187,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 SELECT 1 AS `not_exist` FROM `not_exist`
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "TABLE_OR_VIEW_NOT_FOUND",
   "sqlState" : "42P01",
@@ -207,7 +207,7 @@ org.apache.spark.sql.AnalysisException
 -- !query
 SELECT 1 FROM not_exist AS X(`hello`)
 -- !query analysis
-org.apache.spark.sql.AnalysisException
+org.apache.spark.sql.catalyst.ExtendedAnalysisException
 {
   "errorClass" : "TABLE_OR_VIEW_NOT_FOUND",
   "sqlState" : "42P01",
@@ -218,8 +218,8 @@ org.apache.spark.sql.AnalysisException
     "objectType" : "",
     "objectName" : "",
     "startIndex" : 15,
-    "stopIndex" : 37,
-    "fragment" : "not_exist AS X(`hello`)"
+    "stopIndex" : 23,
+    "fragment" : "not_exist"
   } ]
 }
 
@@ -276,7 +276,7 @@ Project [hello AS hello#x]
 -- !query
 CREATE TEMPORARY VIEW v(c1 COMMENT "hello") AS SELECT 1
 -- !query analysis
-CreateViewCommand `v`, [(c1,Some(hello))], SELECT 1, false, false, LocalTempView, true
+CreateViewCommand `v`, [(c1,Some(hello))], SELECT 1, false, false, LocalTempView, UNSUPPORTED, true
    +- Project [1 AS 1#x]
       +- OneRowRelation
 
@@ -304,7 +304,7 @@ Project [hello AS hello#x]
 -- !query
 CREATE TEMPORARY VIEW v(c1 COMMENT 'hello') AS SELECT 1
 -- !query analysis
-CreateViewCommand `v`, [(c1,Some(hello))], SELECT 1, false, false, LocalTempView, true
+CreateViewCommand `v`, [(c1,Some(hello))], SELECT 1, false, false, LocalTempView, UNSUPPORTED, true
    +- Project [1 AS 1#x]
       +- OneRowRelation
 

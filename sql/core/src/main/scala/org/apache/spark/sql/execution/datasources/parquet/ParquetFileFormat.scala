@@ -17,8 +17,8 @@
 
 package org.apache.spark.sql.execution.datasources.parquet
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 import scala.util.{Failure, Try}
 
 import org.apache.hadoop.conf.Configuration
@@ -32,12 +32,14 @@ import org.apache.parquet.format.converter.ParquetMetadataConverter.SKIP_ROW_GRO
 import org.apache.parquet.hadoop._
 
 import org.apache.spark.TaskContext
-import org.apache.spark.internal.Logging
+import org.apache.spark.internal.{Logging, MDC}
+import org.apache.spark.internal.LogKeys.{PATH, SCHEMA}
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeProjection
 import org.apache.spark.sql.catalyst.parser.LegacyTypeStringParser
+import org.apache.spark.sql.catalyst.types.DataTypeUtils.toAttributes
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution.datasources._
@@ -323,7 +325,7 @@ class ParquetFileFormat
         try {
           readerWithRowIndexes.initialize(split, hadoopAttemptContext)
 
-          val fullSchema = requiredSchema.toAttributes ++ partitionSchema.toAttributes
+          val fullSchema = toAttributes(requiredSchema) ++ toAttributes(partitionSchema)
           val unsafeProjection = GenerateUnsafeProjection.generate(fullSchema, fullSchema)
 
           if (partitionSchema.length == 0) {
@@ -408,8 +410,8 @@ object ParquetFileFormat extends Logging {
           }
           .recover { case cause: Throwable =>
             logWarning(
-              s"""Failed to parse serialized Spark schema in Parquet key-value metadata:
-                 |\t$serializedSchema
+              log"""Failed to parse serialized Spark schema in Parquet key-value metadata:
+                 |\t${MDC(SCHEMA, serializedSchema)}
                """.stripMargin,
               cause)
           }
@@ -449,7 +451,7 @@ object ParquetFileFormat extends Logging {
             conf, currentFile, SKIP_ROW_GROUPS)))
       } catch { case e: RuntimeException =>
         if (ignoreCorruptFiles) {
-          logWarning(s"Skipped the footer in the corrupted file: $currentFile", e)
+          logWarning(log"Skipped the footer in the corrupted file: ${MDC(PATH, currentFile)}", e)
           None
         } else {
           throw QueryExecutionErrors.cannotReadFooterForFileError(currentFile.getPath, e)
@@ -525,8 +527,8 @@ object ParquetFileFormat extends Logging {
     }.recoverWith {
       case cause: Throwable =>
         logWarning(
-          "Failed to parse and ignored serialized Spark schema in " +
-            s"Parquet key-value metadata:\n\t$schemaString", cause)
+          log"Failed to parse and ignored serialized Spark schema in " +
+            log"Parquet key-value metadata:\n\t${MDC(SCHEMA, schemaString)}", cause)
         Failure(cause)
     }.toOption
   }

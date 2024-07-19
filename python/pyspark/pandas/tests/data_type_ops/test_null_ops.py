@@ -19,6 +19,7 @@ import pandas as pd
 from pandas.api.types import CategoricalDtype
 
 import pyspark.pandas as ps
+from pyspark.testing.pandasutils import PandasOnSparkTestCase
 from pyspark.pandas.tests.data_type_ops.testing_utils import OpsTestBase
 
 
@@ -138,6 +139,7 @@ class NullOpsTestsMixin:
     def test_eq(self):
         pser, psser = self.pser, self.psser
         self.assert_eq(pser == pser, psser == psser)
+        self.assert_eq(pser == [None, 1, None], psser == [None, 1, None])
 
     def test_ne(self):
         pser, psser = self.pser, self.psser
@@ -160,7 +162,11 @@ class NullOpsTestsMixin:
         self.assert_eq(pser >= pser, psser >= psser)
 
 
-class NullOpsTests(NullOpsTestsMixin, OpsTestBase):
+class NullOpsTests(
+    NullOpsTestsMixin,
+    OpsTestBase,
+    PandasOnSparkTestCase,
+):
     pass
 
 

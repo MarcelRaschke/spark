@@ -16,19 +16,20 @@
  */
 package org.apache.spark.sql
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
-import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.annotation.{DeveloperApi, Since}
 import org.apache.spark.connect.proto
 import org.apache.spark.connect.proto.Expression.SortOrder.NullOrdering
 import org.apache.spark.connect.proto.Expression.SortOrder.SortDirection
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.encoders.AgnosticEncoder
-import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
+import org.apache.spark.sql.catalyst.parser.DataTypeParser
 import org.apache.spark.sql.connect.common.DataTypeProtoConverter
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.types._
+import org.apache.spark.util.ArrayImplicits._
 
 /**
  * A column that will be computed based on the data in a `DataFrame`.
@@ -51,7 +52,7 @@ import org.apache.spark.sql.types._
  *
  * @since 3.4.0
  */
-class Column private[sql] (@DeveloperApi val expr: proto.Expression) extends Logging {
+class Column(@DeveloperApi val expr: proto.Expression) extends Logging {
 
   private[sql] def this(name: String, planId: Option[Long]) =
     this(Column.nameToExpression(name, planId))
@@ -1004,7 +1005,7 @@ class Column private[sql] (@DeveloperApi val expr: proto.Expression) extends Log
    * @group expr_ops
    * @since 3.4.0
    */
-  def as(aliases: Array[String]): Column = as(aliases.toSeq)
+  def as(aliases: Array[String]): Column = as(aliases.toImmutableArraySeq)
 
   /**
    * Gives the column an alias.
@@ -1087,7 +1088,42 @@ class Column private[sql] (@DeveloperApi val expr: proto.Expression) extends Log
    * @group expr_ops
    * @since 3.4.0
    */
-  def cast(to: String): Column = cast(CatalystSqlParser.parseDataType(to))
+  def cast(to: String): Column = cast(DataTypeParser.parseDataType(to))
+
+  /**
+   * Casts the column to a different data type and the result is null on failure.
+   * {{{
+   *   // Casts colA to IntegerType.
+   *   import org.apache.spark.sql.types.IntegerType
+   *   df.select(df("colA").try_cast(IntegerType))
+   *
+   *   // equivalent to
+   *   df.select(df("colA").try_cast("int"))
+   * }}}
+   *
+   * @group expr_ops
+   * @since 4.0.0
+   */
+  def try_cast(to: DataType): Column = Column { builder =>
+    builder.getCastBuilder
+      .setExpr(expr)
+      .setType(DataTypeProtoConverter.toConnectProtoType(to))
+      .setEvalMode(proto.Expression.Cast.EvalMode.EVAL_MODE_TRY)
+  }
+
+  /**
+   * Casts the column to a different data type and the result is null on failure.
+   * {{{
+   *   // Casts colA to integer.
+   *   df.select(df("colA").try_cast("int"))
+   * }}}
+   *
+   * @group expr_ops
+   * @since 4.0.0
+   */
+  def try_cast(to: String): Column = {
+    try_cast(DataTypeParser.parseDataType(to))
+  }
 
   /**
    * Returns a sort expression based on the descending order of the column.
@@ -1287,17 +1323,20 @@ class Column private[sql] (@DeveloperApi val expr: proto.Expression) extends Log
   def over(): Column = over(Window.spec)
 }
 
-private[sql] object Column {
+object Column {
 
-  def apply(name: String): Column = new Column(name)
+  private[sql] def apply(name: String): Column = new Column(name)
 
-  def apply(name: String, planId: Option[Long]): Column = new Column(name, planId)
+  private[sql] def apply(name: String, planId: Option[Long]): Column = new Column(name, planId)
 
-  def nameToExpression(name: String, planId: Option[Long] = None): proto.Expression = {
+  private[sql] def nameToExpression(
+      name: String,
+      planId: Option[Long] = None): proto.Expression = {
     val builder = proto.Expression.newBuilder()
     name match {
       case "*" =>
-        builder.getUnresolvedStarBuilder
+        val starBuilder = builder.getUnresolvedStarBuilder
+        planId.foreach(starBuilder.setPlanId)
       case _ if name.endsWith(".*") =>
         builder.getUnresolvedStarBuilder.setUnparsedTarget(name)
       case _ =>
@@ -1307,15 +1346,12 @@ private[sql] object Column {
     builder.build()
   }
 
-  private[sql] def apply(f: proto.Expression.Builder => Unit): Column = {
+  @Since("4.0.0")
+  @DeveloperApi
+  def apply(f: proto.Expression.Builder => Unit): Column = {
     val builder = proto.Expression.newBuilder()
     f(builder)
     new Column(builder.build())
-  }
-
-  @DeveloperApi
-  def apply(extension: com.google.protobuf.Any): Column = {
-    apply(_.setExtension(extension))
   }
 
   private[sql] def fn(name: String, inputs: Column*): Column = {

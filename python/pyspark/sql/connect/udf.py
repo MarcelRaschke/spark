@@ -25,20 +25,23 @@ import sys
 import functools
 import warnings
 from inspect import getfullargspec
-from typing import cast, Callable, Any, TYPE_CHECKING, Optional, Union
+from typing import cast, Callable, Any, List, TYPE_CHECKING, Optional, Union
 
-from pyspark.rdd import PythonEvalType
+from pyspark.util import PythonEvalType
 from pyspark.sql.connect.expressions import (
     ColumnReference,
-    PythonUDF,
     CommonInlineUserDefinedFunction,
+    Expression,
+    NamedArgumentExpression,
+    PythonUDF,
 )
 from pyspark.sql.connect.column import Column
-from pyspark.sql.connect.types import UnparsedDataType
-from pyspark.sql.types import ArrayType, DataType, MapType, StringType, StructType
-from pyspark.sql.udf import UDFRegistration as PySparkUDFRegistration
-from pyspark.errors import PySparkTypeError
-
+from pyspark.sql.types import DataType, StringType, _parse_datatype_string
+from pyspark.sql.udf import (
+    UDFRegistration as PySparkUDFRegistration,
+    UserDefinedFunction as PySparkUserDefinedFunction,
+)
+from pyspark.errors import PySparkTypeError, PySparkRuntimeError
 
 if TYPE_CHECKING:
     from pyspark.sql.connect._typing import (
@@ -55,40 +58,41 @@ def _create_py_udf(
     returnType: "DataTypeOrString",
     useArrow: Optional[bool] = None,
 ) -> "UserDefinedFunctionLike":
-    from pyspark.sql.udf import _create_arrow_py_udf
-    from pyspark.sql.connect.session import _active_spark_session
-
-    if _active_spark_session is None:
+    if useArrow is None:
         is_arrow_enabled = False
-    else:
-        is_arrow_enabled = (
-            _active_spark_session.conf.get("spark.sql.execution.pythonUDF.arrow.enabled") == "true"
-            if useArrow is None
-            else useArrow
-        )
+        try:
+            from pyspark.sql.connect.session import SparkSession
 
-    regular_udf = _create_udf(f, returnType, PythonEvalType.SQL_BATCHED_UDF)
-    return_type = regular_udf.returnType
-    try:
-        is_func_with_args = len(getfullargspec(f).args) > 0
-    except TypeError:
-        is_func_with_args = False
-    is_output_atomic_type = (
-        not isinstance(return_type, StructType)
-        and not isinstance(return_type, MapType)
-        and not isinstance(return_type, ArrayType)
-    )
+            session = SparkSession.active()
+            is_arrow_enabled = (
+                str(session.conf.get("spark.sql.execution.pythonUDF.arrow.enabled")).lower()
+                == "true"
+            )
+        except PySparkRuntimeError as e:
+            if e.getErrorClass() == "NO_ACTIVE_OR_DEFAULT_SESSION":
+                pass  # Just uses the default if no session found.
+            else:
+                raise e
+    else:
+        is_arrow_enabled = useArrow
+
+    eval_type: int = PythonEvalType.SQL_BATCHED_UDF
+
     if is_arrow_enabled:
-        if is_output_atomic_type and is_func_with_args:
-            return _create_arrow_py_udf(regular_udf)
+        try:
+            is_func_with_args = len(getfullargspec(f).args) > 0
+        except TypeError:
+            is_func_with_args = False
+        if is_func_with_args:
+            eval_type = PythonEvalType.SQL_ARROW_BATCHED_UDF
         else:
             warnings.warn(
-                "Arrow optimization for Python UDFs cannot be enabled.",
+                "Arrow optimization for Python UDFs cannot be enabled for functions"
+                " without arguments.",
                 UserWarning,
             )
-            return regular_udf
-    else:
-        return regular_udf
+
+    return _create_udf(f, returnType, eval_type)
 
 
 def _create_udf(
@@ -146,22 +150,40 @@ class UserDefinedFunction:
             )
 
         self.func = func
-        self.returnType: DataType = (
-            UnparsedDataType(returnType) if isinstance(returnType, str) else returnType
-        )
+        self._returnType = returnType
+        self._returnType_placeholder: Optional[DataType] = None
         self._name = name or (
             func.__name__ if hasattr(func, "__name__") else func.__class__.__name__
         )
         self.evalType = evalType
         self.deterministic = deterministic
 
+    @property
+    def returnType(self) -> DataType:
+        # Make sure this is called after Connect Session is initialized.
+        # ``_parse_datatype_string`` accesses to Connect Server for parsing a DDL formatted string.
+        # TODO: PythonEvalType.SQL_BATCHED_UDF
+        if self._returnType_placeholder is None:
+            if isinstance(self._returnType, DataType):
+                self._returnType_placeholder = self._returnType
+            else:
+                self._returnType_placeholder = _parse_datatype_string(self._returnType)
+
+        PySparkUserDefinedFunction._check_return_type(self._returnType_placeholder, self.evalType)
+        return self._returnType_placeholder
+
     def _build_common_inline_user_defined_function(
-        self, *cols: "ColumnOrName"
+        self, *args: "ColumnOrName", **kwargs: "ColumnOrName"
     ) -> CommonInlineUserDefinedFunction:
-        arg_cols = [
-            col if isinstance(col, Column) else Column(ColumnReference(col)) for col in cols
+        def to_expr(col: "ColumnOrName") -> Expression:
+            if isinstance(col, Column):
+                return col._expr
+            else:
+                return ColumnReference(col)  # type: ignore[arg-type]
+
+        arg_exprs: List[Expression] = [to_expr(arg) for arg in args] + [
+            NamedArgumentExpression(key, to_expr(value)) for key, value in kwargs.items()
         ]
-        arg_exprs = [col._expr for col in arg_cols]
 
         py_udf = PythonUDF(
             output_type=self.returnType,
@@ -176,8 +198,8 @@ class UserDefinedFunction:
             arguments=arg_exprs,
         )
 
-    def __call__(self, *cols: "ColumnOrName") -> Column:
-        return Column(self._build_common_inline_user_defined_function(*cols))
+    def __call__(self, *args: "ColumnOrName", **kwargs: "ColumnOrName") -> Column:
+        return Column(self._build_common_inline_user_defined_function(*args, **kwargs))
 
     # This function is for improving the online help system in the interactive interpreter.
     # For example, the built-in help / pydoc.help. It wraps the UDF with the docstring and
@@ -197,8 +219,8 @@ class UserDefinedFunction:
         )
 
         @functools.wraps(self.func, assigned=assignments)
-        def wrapper(*args: "ColumnOrName") -> Column:
-            return self(*args)
+        def wrapper(*args: "ColumnOrName", **kwargs: "ColumnOrName") -> Column:
+            return self(*args, **kwargs)
 
         wrapper.__name__ = self._name
         wrapper.__module__ = (

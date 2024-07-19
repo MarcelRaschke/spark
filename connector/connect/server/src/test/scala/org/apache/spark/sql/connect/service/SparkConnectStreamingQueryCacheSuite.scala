@@ -18,7 +18,6 @@
 package org.apache.spark.sql.connect.service
 
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
 
 import scala.concurrent.duration.DurationInt
 
@@ -36,9 +35,8 @@ import org.apache.spark.util.ManualClock
 class SparkConnectStreamingQueryCacheSuite extends SparkFunSuite with MockitoSugar {
 
   // Creates a manager with short durations for periodic check and expiry.
-  private def createSessionManager(keepAliveFn: (String, String) => Unit) = {
+  private def createSessionManager() = {
     new SparkConnectStreamingQueryCache(
-      keepAliveFn,
       clock = new ManualClock(),
       stoppedQueryInactivityTimeout = 1.minute, // This is on manual clock.
       sessionPollingPeriod = 20.milliseconds // This is real clock. Used for periodic task.
@@ -47,8 +45,6 @@ class SparkConnectStreamingQueryCacheSuite extends SparkFunSuite with MockitoSug
 
   test("Session cache functionality with a streaming query") {
     // Verifies common happy path for the query cache. Runs a query through its life cycle.
-
-    val numKeepAliveCalls = new AtomicInteger(0)
 
     val queryId = UUID.randomUUID().toString
     val runId = UUID.randomUUID().toString
@@ -59,11 +55,7 @@ class SparkConnectStreamingQueryCacheSuite extends SparkFunSuite with MockitoSug
     val sessionHolder =
       SessionHolder(userId = "test_user_1", sessionId = "test_session_1", session = mockSession)
 
-    val sessionMgr = createSessionManager(keepAliveFn = { case (userId, sessionId) =>
-      assert(userId == sessionHolder.userId)
-      assert(sessionId == sessionHolder.sessionId)
-      numKeepAliveCalls.incrementAndGet()
-    })
+    val sessionMgr = createSessionManager()
 
     val clock = sessionMgr.clock.asInstanceOf[ManualClock]
 
@@ -75,12 +67,7 @@ class SparkConnectStreamingQueryCacheSuite extends SparkFunSuite with MockitoSug
 
     // Register the query.
 
-    sessionMgr.registerNewStreamingQuery(sessionHolder, mockQuery)
-
-    eventually(timeout(1.minute)) {
-      // Verify keep alive function is called a few times.
-      assert(numKeepAliveCalls.get() >= 5)
-    }
+    sessionMgr.registerNewStreamingQuery(sessionHolder, mockQuery, Set.empty[String], "")
 
     sessionMgr.getCachedValue(queryId, runId) match {
       case Some(v) =>
@@ -91,11 +78,16 @@ class SparkConnectStreamingQueryCacheSuite extends SparkFunSuite with MockitoSug
     }
 
     // Verify query is returned only with the correct session, not with a different session.
-    assert(sessionMgr.getCachedQuery(queryId, runId, mock[SparkSession]).isEmpty)
+    assert(
+      sessionMgr.getCachedQuery(queryId, runId, Set.empty[String], mock[SparkSession]).isEmpty)
     // Query is returned when correct session is used
-    assert(sessionMgr.getCachedQuery(queryId, runId, mockSession).contains(mockQuery))
+    assert(
+      sessionMgr
+        .getCachedQuery(queryId, runId, Set.empty[String], mockSession)
+        .map(_.query)
+        .contains(mockQuery))
 
-    // Stop the query.
+    // Cleanup the query and verify if stop() method has been called.
     when(mockQuery.isActive).thenReturn(false)
 
     val expectedExpiryTimeMs = sessionMgr.clock.getTimeMillis() + 1.minute.toMillis
@@ -112,7 +104,11 @@ class SparkConnectStreamingQueryCacheSuite extends SparkFunSuite with MockitoSug
     clock.advance(30.seconds.toMillis)
 
     // Access the query. This should advance expiry time by 30 seconds.
-    assert(sessionMgr.getCachedQuery(queryId, runId, mockSession).contains(mockQuery))
+    assert(
+      sessionMgr
+        .getCachedQuery(queryId, runId, Set.empty[String], mockSession)
+        .map(_.query)
+        .contains(mockQuery))
     val expiresAtMs = sessionMgr.getCachedValue(queryId, runId).get.expiresAtMs.get
     assert(expiresAtMs == prevExpiryTimeMs + 30.seconds.toMillis)
 
@@ -125,7 +121,7 @@ class SparkConnectStreamingQueryCacheSuite extends SparkFunSuite with MockitoSug
     when(restartedQuery.isActive).thenReturn(true)
     when(mockStreamingQueryManager.get(queryId)).thenReturn(restartedQuery)
 
-    sessionMgr.registerNewStreamingQuery(sessionHolder, restartedQuery)
+    sessionMgr.registerNewStreamingQuery(sessionHolder, restartedQuery, Set.empty[String], "")
 
     // Both queries should existing in the cache.
     assert(sessionMgr.getCachedValue(queryId, runId).map(_.query).contains(mockQuery))

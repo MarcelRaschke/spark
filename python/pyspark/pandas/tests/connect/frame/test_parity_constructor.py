@@ -16,22 +16,17 @@
 #
 import unittest
 
-from pyspark import pandas as ps
 from pyspark.pandas.tests.frame.test_constructor import FrameConstructorMixin
 from pyspark.testing.connectutils import ReusedConnectTestCase
 from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
 
 class FrameParityConstructorTests(
-    FrameConstructorMixin, PandasOnSparkTestUtils, ReusedConnectTestCase
+    FrameConstructorMixin,
+    PandasOnSparkTestUtils,
+    ReusedConnectTestCase,
 ):
-    @property
-    def psdf(self):
-        return ps.from_pandas(self.pdf)
-
-    @unittest.skip("TODO(SPARK-43622): Enable pyspark.pandas.spark.functions.var in Spark Connect.")
-    def test_dataframe(self):
-        super().test_dataframe()
+    pass
 
 
 if __name__ == "__main__":

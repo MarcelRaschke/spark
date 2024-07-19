@@ -73,9 +73,7 @@ Project [a#x, b#x]
 -- !query
 select a from values ("one", current_timestamp) as data(a, b)
 -- !query analysis
-Project [a#x]
-+- SubqueryAlias data
-   +- LocalRelation [a#x, b#x]
+[Analyzer test output redacted due to nondeterminism]
 
 
 -- !query
@@ -99,9 +97,10 @@ select * from values ("one", rand(5)), ("two", 3.0D) as data(a, b)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2304",
+  "errorClass" : "INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE",
+  "sqlState" : "42000",
   "messageParameters" : {
-    "sqlExpr" : "rand(5)"
+    "expr" : "\"rand(5)\""
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -118,11 +117,12 @@ select * from values ("one", 2.0), ("two") as data(a, b)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2305",
+  "errorClass" : "INVALID_INLINE_TABLE.NUM_COLUMNS_MISMATCH",
+  "sqlState" : "42000",
   "messageParameters" : {
-    "numCols" : "2",
-    "ri" : "1",
-    "rowSize" : "1"
+    "actualNumCols" : "1",
+    "expectedNumCols" : "2",
+    "rowIndex" : "1"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -139,9 +139,10 @@ select * from values ("one", array(0, 1)), ("two", struct(1, 2)) as data(a, b)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2303",
+  "errorClass" : "INVALID_INLINE_TABLE.INCOMPATIBLE_TYPES_IN_INLINE_TABLE",
+  "sqlState" : "42000",
   "messageParameters" : {
-    "name" : "b"
+    "colName" : "`b`"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -158,11 +159,12 @@ select * from values ("one"), ("two") as data(a, b)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2305",
+  "errorClass" : "INVALID_INLINE_TABLE.NUM_COLUMNS_MISMATCH",
+  "sqlState" : "42000",
   "messageParameters" : {
-    "numCols" : "2",
-    "ri" : "0",
-    "rowSize" : "1"
+    "actualNumCols" : "1",
+    "expectedNumCols" : "2",
+    "rowIndex" : "0"
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -200,9 +202,10 @@ select * from values ("one", count(1)), ("two", 2) as data(a, b)
 -- !query analysis
 org.apache.spark.sql.AnalysisException
 {
-  "errorClass" : "_LEGACY_ERROR_TEMP_2304",
+  "errorClass" : "INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE",
+  "sqlState" : "42000",
   "messageParameters" : {
-    "sqlExpr" : "count(1)"
+    "expr" : "\"count(1)\""
   },
   "queryContext" : [ {
     "objectType" : "",
@@ -220,3 +223,36 @@ select * from values (timestamp('1991-12-06 00:00:00.0'), array(timestamp('1991-
 Project [a#x, b#x]
 +- SubqueryAlias data
    +- LocalRelation [a#x, b#x]
+
+
+-- !query
+select * from values (try_add(5, 0))
+-- !query analysis
+Project [col1#x]
++- LocalRelation [col1#x]
+
+
+-- !query
+select * from values (try_divide(5, 0))
+-- !query analysis
+Project [col1#x]
++- LocalRelation [col1#x]
+
+
+-- !query
+select * from values (10 + try_divide(5, 0))
+-- !query analysis
+Project [col1#x]
++- LocalRelation [col1#x]
+
+
+-- !query
+select count(distinct ct) from values now(), now(), now() as data(ct)
+-- !query analysis
+[Analyzer test output redacted due to nondeterminism]
+
+
+-- !query
+select count(distinct ct) from values current_timestamp(), current_timestamp() as data(ct)
+-- !query analysis
+[Analyzer test output redacted due to nondeterminism]

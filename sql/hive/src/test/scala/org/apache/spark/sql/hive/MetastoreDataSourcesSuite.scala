@@ -525,10 +525,21 @@ class MetastoreDataSourcesSuite extends QueryTest
           assert(table("createdJsonTable").schema === df.schema)
           checkAnswer(sql("SELECT * FROM createdJsonTable"), df)
 
-          val e = intercept[AnalysisException] {
-              sparkSession.catalog.createTable("createdJsonTable", jsonFilePath.toString)
+          Seq("true", "false").foreach { caseSensitive =>
+            withSQLConf(SQLConf.CASE_SENSITIVE.key -> caseSensitive) {
+              val e = intercept[AnalysisException] {
+                sparkSession.catalog.createTable("createdJsonTable", tempPath.toString)
+              }
+              val expectedTableName = s"`$SESSION_CATALOG_NAME`.`default`." + {
+                if (caseSensitive.toBoolean) {
+                  "`createdJsonTable`"
+                } else {
+                  "`createdjsontable`"
+                }
+              }
+              checkErrorTableAlreadyExists(e, expectedTableName)
             }
-          checkErrorTableAlreadyExists(e, s"`$SESSION_CATALOG_NAME`.`default`.`createdJsonTable`")
+          }
         }
 
         // Data should not be deleted.
@@ -555,16 +566,18 @@ class MetastoreDataSourcesSuite extends QueryTest
   }
 
   test("path required error") {
-    assert(
-      intercept[AnalysisException] {
+    checkError(
+      exception = intercept[AnalysisException] {
         sparkSession.catalog.createTable(
           "createdJsonTable",
           "org.apache.spark.sql.json",
           Map.empty[String, String])
 
         table("createdJsonTable")
-      }.getMessage.contains("Unable to infer schema"),
-      "We should complain that path is not specified.")
+      },
+      errorClass = "UNABLE_TO_INFER_SCHEMA",
+      parameters = Map("format" -> "JSON")
+    )
 
     sql("DROP TABLE IF EXISTS createdJsonTable")
   }
@@ -907,33 +920,51 @@ class MetastoreDataSourcesSuite extends QueryTest
 
     withTable("appendOrcToParquet") {
       createDF(0, 9).write.format("parquet").saveAsTable("appendOrcToParquet")
-      val e = intercept[AnalysisException] {
-        createDF(10, 19).write.mode(SaveMode.Append).format("orc").saveAsTable("appendOrcToParquet")
-      }
-      assert(e.getMessage.contains("The format of the existing table " +
-        s"$SESSION_CATALOG_NAME.default.appendorctoparquet is `Parquet"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          createDF(10, 19).write.mode(SaveMode.Append).format("orc").
+            saveAsTable("appendOrcToParquet")
+        },
+        errorClass = "_LEGACY_ERROR_TEMP_1159",
+        parameters = Map(
+          "tableName" -> s"$SESSION_CATALOG_NAME.default.appendorctoparquet",
+          "existingProvider" -> "ParquetDataSourceV2",
+          "specifiedProvider" -> "OrcDataSourceV2"
+        )
+      )
     }
 
     withTable("appendParquetToJson") {
       createDF(0, 9).write.format("json").saveAsTable("appendParquetToJson")
-      val msg = intercept[AnalysisException] {
-        createDF(10, 19).write.mode(SaveMode.Append).format("parquet")
-          .saveAsTable("appendParquetToJson")
-      }.getMessage
-
-      assert(msg.contains("The format of the existing table " +
-        s"$SESSION_CATALOG_NAME.default.appendparquettojson is `Json"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          createDF(10, 19).write.mode(SaveMode.Append).format("parquet")
+            .saveAsTable("appendParquetToJson")
+        },
+        errorClass = "_LEGACY_ERROR_TEMP_1159",
+        parameters = Map(
+          "tableName" -> s"$SESSION_CATALOG_NAME.default.appendparquettojson",
+          "existingProvider" -> "JsonDataSourceV2",
+          "specifiedProvider" -> "ParquetDataSourceV2"
+        )
+      )
     }
 
     withTable("appendTextToJson") {
       createDF(0, 9).write.format("json").saveAsTable("appendTextToJson")
-      val msg = intercept[AnalysisException] {
-        createDF(10, 19).write.mode(SaveMode.Append).format("text")
-          .saveAsTable("appendTextToJson")
-      }.getMessage
-      // The format of the existing table can be JsonDataSourceV2 or JsonFileFormat.
-      assert(msg.contains("The format of the existing table " +
-        s"$SESSION_CATALOG_NAME.default.appendtexttojson is `Json"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          createDF(10, 19).write.mode(SaveMode.Append).format("text")
+            .saveAsTable("appendTextToJson")
+        },
+        errorClass = "_LEGACY_ERROR_TEMP_1159",
+        // The format of the existing table can be JsonDataSourceV2 or JsonFileFormat.
+        parameters = Map(
+          "tableName" -> s"$SESSION_CATALOG_NAME.default.appendtexttojson",
+          "existingProvider" -> "JsonDataSourceV2",
+          "specifiedProvider" -> "TextDataSourceV2"
+        )
+      )
     }
   }
 
@@ -1225,16 +1256,18 @@ class MetastoreDataSourcesSuite extends QueryTest
   test("create a temp view using hive") {
     val tableName = "tab1"
     withTempView(tableName) {
-      val e = intercept[AnalysisException] {
-        sql(
-          s"""
-             |CREATE TEMPORARY VIEW $tableName
-             |(col1 int)
-             |USING hive
-           """.stripMargin)
-      }.getMessage
-      assert(e.contains("Hive data source can only be used with tables, you can't use it with " +
-        "CREATE TEMP VIEW USING"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql(
+            s"""
+               |CREATE TEMPORARY VIEW $tableName
+               |(col1 int)
+               |USING hive
+             """.stripMargin)
+        },
+        errorClass = "_LEGACY_ERROR_TEMP_1293",
+        parameters = Map.empty
+      )
     }
   }
 
@@ -1251,17 +1284,21 @@ class MetastoreDataSourcesSuite extends QueryTest
       checkAnswer(table(tableName),
         Seq(Row(1, 2), Row(1, 2)))
 
-      var e = intercept[AnalysisException] {
-        table(tableName).write.mode(SaveMode.Overwrite).saveAsTable(tableName)
-      }
-      assert(e.getMessage.contains(
-        s"Cannot overwrite table $SESSION_CATALOG_NAME.default.$tableName " +
-        "that is also being read from"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          table(tableName).write.mode(SaveMode.Overwrite).saveAsTable(tableName)
+        },
+        errorClass = "UNSUPPORTED_OVERWRITE.TABLE",
+        parameters = Map("table" -> s"`$SESSION_CATALOG_NAME`.`default`.`tab1`")
+      )
 
-      e = intercept[AnalysisException] {
-        table(tableName).write.mode(SaveMode.ErrorIfExists).saveAsTable(tableName)
-      }
-      checkErrorTableAlreadyExists(e, s"`$SESSION_CATALOG_NAME`.`default`.`$tableName`")
+      checkError(
+        exception = intercept[AnalysisException] {
+          table(tableName).write.mode(SaveMode.ErrorIfExists).saveAsTable(tableName)
+        },
+        errorClass = "TABLE_OR_VIEW_ALREADY_EXISTS",
+        parameters = Map("relationName" -> s"`$SESSION_CATALOG_NAME`.`default`.`tab1`")
+      )
     }
   }
 
@@ -1285,10 +1322,13 @@ class MetastoreDataSourcesSuite extends QueryTest
         table(tableName),
         Seq(Row(1, 2), Row(1, 2), Row(1, 2), Row(1, 2), Row(1, 2), Row(1, 2), Row(1, 2), Row(1, 2)))
 
-      val e = intercept[AnalysisException] {
-        table(tableName).write.mode(SaveMode.Overwrite).insertInto(tableName)
-      }.getMessage
-      assert(e.contains(s"Cannot overwrite a path that is also being read from"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          table(tableName).write.mode(SaveMode.Overwrite).insertInto(tableName)
+        },
+        errorClass = "UNSUPPORTED_OVERWRITE.TABLE",
+        parameters = Map("table" -> s"`$SESSION_CATALOG_NAME`.`default`.`tab1`")
+      )
     }
   }
 
